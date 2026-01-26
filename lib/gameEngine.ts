@@ -147,7 +147,7 @@ export function updateGameState(
   if (state.slowMoUntil && currentTime < state.slowMoUntil) {
     effectiveDelta *= state.slowMoFactor || 0.3;
   }
-  let { player, enemies, projectiles, powerups, experienceOrbs, particles, score, multiplier, multiplierTimer, screenShake } = state;
+  let { player, enemies, projectiles, powerups, experienceOrbs, particles, score, multiplier, multiplierTimer, screenShake, totalDamageDealt } = state;
 
   // Update player position based on input
   const oldPos = { ...player.position };
@@ -181,11 +181,12 @@ export function updateGameState(
     .filter(p => isProjectileAlive(p, width, height));
 
   // Check projectile-enemy collisions
-  const { updatedEnemies, updatedProjectiles, killedEnemies, damageParticles } = 
+  const { updatedEnemies, updatedProjectiles, killedEnemies, damageParticles, damageDealt } = 
     checkProjectileCollisions(enemies, projectiles, currentTime);
   enemies = updatedEnemies;
   projectiles = updatedProjectiles;
   particles = [...particles, ...damageParticles];
+  totalDamageDealt += damageDealt;
 
   // Process killed enemies
   killedEnemies.forEach(enemy => {
@@ -466,6 +467,7 @@ export function updateGameState(
     multiplier,
     multiplierTimer,
     screenShake,
+    totalDamageDealt,
   };
 }
 
@@ -627,11 +629,13 @@ function checkProjectileCollisions(
   updatedProjectiles: Projectile[];
   killedEnemies: Enemy[];
   damageParticles: Particle[];
+  damageDealt: number;
 } {
   const killedEnemies: Enemy[] = [];
   const damageParticles: Particle[] = [];
   let updatedProjectiles = [...projectiles];
   let updatedEnemies = [...enemies];
+  let damageDealt = 0;
 
   updatedProjectiles = updatedProjectiles.filter(projectile => {
     if (projectile.isEnemy) return true;
@@ -650,7 +654,7 @@ function checkProjectileCollisions(
         enemy.health -= projectile.damage;
 
         // Track damage dealt
-        state = { ...state, totalDamageDealt: state.totalDamageDealt + projectile.damage };
+        damageDealt += projectile.damage;
 
         // Create damage number particle
         damageParticles.push({
@@ -825,7 +829,7 @@ function checkProjectileCollisions(
     return true;
   });
 
-  return { updatedEnemies, updatedProjectiles, killedEnemies, damageParticles };
+  return { updatedEnemies, updatedProjectiles, killedEnemies, damageParticles, damageDealt };
 }
 
 function updateEnemy(enemy: Enemy, player: Player, deltaTime: number, currentTime: number): Enemy {

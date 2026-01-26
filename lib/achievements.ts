@@ -201,7 +201,7 @@ export function unlockAchievement(id: string): void {
   try {
     const unlocked = getUnlockedAchievements();
     unlocked.add(id);
-    localStorage.setItem('neon-survivors-achievements', JSON.stringify([...unlocked]));
+    localStorage.setItem('neon-survivors-achievements', JSON.stringify(Array.from(unlocked)));
   } catch (e) {
     console.warn('Failed to save achievement');
   }

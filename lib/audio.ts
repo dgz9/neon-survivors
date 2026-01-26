@@ -160,6 +160,7 @@ export function playLevelUp() {
   const ctx = getAudioContext();
   if (!ctx || !masterGain || muted) return;
   
+  const master = masterGain; // Capture for closure
   const notes = [523.25, 659.25, 783.99, 1046.50]; // C5, E5, G5, C6
   
   notes.forEach((freq, i) => {
@@ -175,7 +176,7 @@ export function playLevelUp() {
     gain.gain.exponentialRampToValueAtTime(0.01, startTime + 0.2);
     
     osc.connect(gain);
-    gain.connect(masterGain);
+    gain.connect(master);
     
     osc.start(startTime);
     osc.stop(startTime + 0.2);
@@ -209,6 +210,7 @@ export function playGameOver() {
   const ctx = getAudioContext();
   if (!ctx || !masterGain || muted) return;
   
+  const master = masterGain; // Capture for closure
   const notes = [392, 349.23, 293.66, 261.63]; // G4, F4, D4, C4
   
   notes.forEach((freq, i) => {
@@ -224,7 +226,7 @@ export function playGameOver() {
     gain.gain.exponentialRampToValueAtTime(0.01, startTime + 0.4);
     
     osc.connect(gain);
-    gain.connect(masterGain);
+    gain.connect(master);
     
     osc.start(startTime);
     osc.stop(startTime + 0.4);
@@ -236,6 +238,7 @@ export function playWaveComplete() {
   const ctx = getAudioContext();
   if (!ctx || !masterGain || muted) return;
   
+  const master = masterGain; // Capture for closure
   const notes = [523.25, 587.33, 659.25, 783.99]; // C5, D5, E5, G5
   
   notes.forEach((freq, i) => {
@@ -250,7 +253,7 @@ export function playWaveComplete() {
     gain.gain.exponentialRampToValueAtTime(0.01, startTime + 0.15);
     
     osc.connect(gain);
-    gain.connect(masterGain);
+    gain.connect(master);
     
     osc.start(startTime);
     osc.stop(startTime + 0.15);
