@@ -188,7 +188,7 @@ export interface GameConfig {
 }
 
 export const DEFAULT_CONFIG: GameConfig = {
-  playerSpeed: 5,
+  playerSpeed: 6.5,  // Increased base speed for more responsive feel
   playerRadius: 24,
   playerMaxHealth: 100,
   enemySpawnRate: 2000,
@@ -308,25 +308,25 @@ export const WEAPON_CONFIGS: Record<WeaponType, {
   color: string;
 }> = {
   blaster: {
-    fireRate: 300,
+    fireRate: 250,      // Faster fire rate
     damage: 15,
-    projectileSpeed: 12,
+    projectileSpeed: 16, // Faster projectiles
     projectileCount: 1,
     piercing: 0,
     color: '#00f0ff',
   },
   spread: {
-    fireRate: 500,
+    fireRate: 400,      // Slightly faster
     damage: 10,
-    projectileSpeed: 10,
+    projectileSpeed: 14, // Faster projectiles
     projectileCount: 5,
     piercing: 0,
     color: '#e4ff1a',
   },
   laser: {
-    fireRate: 100,
+    fireRate: 80,       // Even faster for laser
     damage: 5,
-    projectileSpeed: 20,
+    projectileSpeed: 25, // Very fast
     projectileCount: 1,
     piercing: 3,
     color: '#ff2d6a',

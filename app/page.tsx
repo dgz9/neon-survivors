@@ -4,6 +4,8 @@ import { useState, useCallback } from 'react';
 import AvatarSelector from '@/components/AvatarSelector';
 import Game from '@/components/Game';
 import GameOver from '@/components/GameOver';
+import Leaderboard from '@/components/Leaderboard';
+import { Trophy } from 'lucide-react';
 
 type GamePhase = 'menu' | 'playing' | 'gameover';
 
@@ -24,6 +26,7 @@ export default function Home() {
     };
   }>({ score: 0, wave: 1, kills: 0 });
   const [selectedArena, setSelectedArena] = useState<'void' | 'grid' | 'cyber' | 'neon'>('grid');
+  const [showLeaderboard, setShowLeaderboard] = useState(false);
 
   const handleStartGame = useCallback((imageUrl: string, name: string) => {
     setPlayerImageUrl(imageUrl);
@@ -123,6 +126,17 @@ export default function Home() {
             </div>
           </div>
 
+          {/* Leaderboard Button */}
+          <button
+            onClick={() => setShowLeaderboard(true)}
+            className="mt-8 flex items-center gap-3 px-6 py-3 border-2 border-electric-yellow/50 hover:border-electric-yellow hover:bg-electric-yellow/10 transition-all group"
+          >
+            <Trophy className="w-5 h-5 text-electric-yellow" />
+            <span className="font-mono text-sm uppercase tracking-wider text-electric-yellow">
+              View Leaderboard
+            </span>
+          </button>
+
           {/* How to play */}
           <div className="w-full max-w-2xl mt-12 mb-8">
             <div className="flex items-center gap-3 mb-4">
@@ -200,6 +214,12 @@ export default function Home() {
           stats={gameStats.stats}
         />
       )}
+
+      {/* Leaderboard Modal */}
+      <Leaderboard 
+        isOpen={showLeaderboard} 
+        onClose={() => setShowLeaderboard(false)} 
+      />
     </div>
   );
 }

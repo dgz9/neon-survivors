@@ -479,27 +479,36 @@ function updatePlayer(
   config: GameConfig,
   deltaTime: number
 ): Player {
-  let vx = 0;
-  let vy = 0;
+  // Target velocity based on input
+  let targetVx = 0;
+  let targetVy = 0;
 
-  if (input.keys.has('w') || input.keys.has('arrowup')) vy -= 1;
-  if (input.keys.has('s') || input.keys.has('arrowdown')) vy += 1;
-  if (input.keys.has('a') || input.keys.has('arrowleft')) vx -= 1;
-  if (input.keys.has('d') || input.keys.has('arrowright')) vx += 1;
+  if (input.keys.has('w') || input.keys.has('arrowup')) targetVy -= 1;
+  if (input.keys.has('s') || input.keys.has('arrowdown')) targetVy += 1;
+  if (input.keys.has('a') || input.keys.has('arrowleft')) targetVx -= 1;
+  if (input.keys.has('d') || input.keys.has('arrowright')) targetVx += 1;
 
   // Normalize diagonal movement
-  const length = Math.sqrt(vx * vx + vy * vy);
+  const length = Math.sqrt(targetVx * targetVx + targetVy * targetVy);
   if (length > 0) {
-    vx = (vx / length) * player.speed;
-    vy = (vy / length) * player.speed;
+    targetVx = (targetVx / length) * player.speed;
+    targetVy = (targetVy / length) * player.speed;
   }
+
+  // Smooth acceleration/deceleration for responsive but smooth movement
+  const acceleration = 0.25; // How fast we reach target velocity (0-1, higher = snappier)
+  const vx = player.velocity.x + (targetVx - player.velocity.x) * acceleration;
+  const vy = player.velocity.y + (targetVy - player.velocity.y) * acceleration;
 
   let newX = player.position.x + vx * deltaTime;
   let newY = player.position.y + vy * deltaTime;
 
-  // Keep player in bounds
-  newX = Math.max(player.radius, Math.min(width - player.radius, newX));
-  newY = Math.max(player.radius, Math.min(height - player.radius, newY));
+  // Keep player in bounds with smooth bounce-back
+  const margin = player.radius;
+  if (newX < margin) { newX = margin; }
+  if (newX > width - margin) { newX = width - margin; }
+  if (newY < margin) { newY = margin; }
+  if (newY > height - margin) { newY = height - margin; }
 
   return {
     ...player,
