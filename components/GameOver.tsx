@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { LeaderboardEntry } from '@/types/game';
 
 interface GameOverProps {
@@ -22,8 +22,8 @@ export default function GameOver({
 }: GameOverProps) {
   const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [hasSubmitted, setHasSubmitted] = useState(false);
   const [playerRank, setPlayerRank] = useState<number | null>(null);
+  const hasSubmittedRef = useRef(false);
 
   // Load leaderboard on mount
   useEffect(() => {
@@ -43,7 +43,9 @@ export default function GameOver({
   };
 
   const submitScore = async () => {
-    if (hasSubmitted || isSubmitting) return;
+    // Use ref to prevent double submission (React StrictMode calls effects twice)
+    if (hasSubmittedRef.current || isSubmitting) return;
+    hasSubmittedRef.current = true;
     
     setIsSubmitting(true);
     try {
@@ -61,11 +63,11 @@ export default function GameOver({
       if (res.ok) {
         const data = await res.json();
         setPlayerRank(data.rank);
-        setHasSubmitted(true);
         loadLeaderboard();
       }
     } catch (error) {
       console.error('Failed to submit score:', error);
+      hasSubmittedRef.current = false; // Allow retry on error
     } finally {
       setIsSubmitting(false);
     }

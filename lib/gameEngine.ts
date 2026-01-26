@@ -220,8 +220,59 @@ export function updateGameState(
       health: player.health - collision.damage,
       invulnerableUntil: currentTime + 1000,
     };
-    screenShake = 10;
-    particles = [...particles, ...createExplosion(player.position, COLORS.pink, 20)];
+    screenShake = 15;
+    
+    // Crash/damage particles - big impact effect
+    particles = [...particles, ...createExplosion(player.position, COLORS.pink, 25)];
+    
+    // Add radial crash lines
+    for (let i = 0; i < 12; i++) {
+      const angle = (i / 12) * Math.PI * 2;
+      particles.push({
+        id: generateId(),
+        position: { ...player.position },
+        velocity: {
+          x: Math.cos(angle) * 10,
+          y: Math.sin(angle) * 10,
+        },
+        color: COLORS.pink,
+        size: 20,
+        life: 200,
+        maxLife: 200,
+        type: 'trail',
+      });
+    }
+    
+    // Expanding damage ring
+    particles.push({
+      id: generateId(),
+      position: { ...player.position },
+      velocity: { x: 0, y: 0 },
+      color: COLORS.pink,
+      size: 50,
+      life: 300,
+      maxLife: 300,
+      type: 'ring',
+    });
+    
+    // White flash particles
+    for (let i = 0; i < 8; i++) {
+      const angle = Math.random() * Math.PI * 2;
+      const speed = 5 + Math.random() * 5;
+      particles.push({
+        id: generateId(),
+        position: { ...player.position },
+        velocity: {
+          x: Math.cos(angle) * speed,
+          y: Math.sin(angle) * speed,
+        },
+        color: COLORS.white,
+        size: 6,
+        life: 200,
+        maxLife: 200,
+        type: 'spark',
+      });
+    }
   }
 
   // Check if player is dead
@@ -484,17 +535,48 @@ function checkProjectileCollisions(
         projectile.hitEnemies.add(enemy.id);
         enemy.health -= projectile.damage;
 
-        // Create damage particle
+        // Create damage number particle
         damageParticles.push({
           id: generateId(),
           position: { ...projectile.position },
-          velocity: { x: 0, y: -2 },
+          velocity: { x: (Math.random() - 0.5) * 2, y: -3 },
           color: COLORS.white,
-          size: 12,
-          life: 500,
-          maxLife: 500,
+          size: 10,
+          life: 400,
+          maxLife: 400,
           type: 'text',
           text: Math.floor(projectile.damage).toString(),
+        });
+
+        // Create hit spark particles
+        for (let i = 0; i < 5; i++) {
+          const sparkAngle = Math.random() * Math.PI * 2;
+          const sparkSpeed = 2 + Math.random() * 3;
+          damageParticles.push({
+            id: generateId(),
+            position: { ...projectile.position },
+            velocity: {
+              x: Math.cos(sparkAngle) * sparkSpeed,
+              y: Math.sin(sparkAngle) * sparkSpeed,
+            },
+            color: projectile.color,
+            size: 3 + Math.random() * 2,
+            life: 150 + Math.random() * 100,
+            maxLife: 250,
+            type: 'spark',
+          });
+        }
+
+        // Impact ring
+        damageParticles.push({
+          id: generateId(),
+          position: { ...projectile.position },
+          velocity: { x: 0, y: 0 },
+          color: projectile.color,
+          size: 15,
+          life: 150,
+          maxLife: 150,
+          type: 'ring',
         });
 
         if (enemy.health <= 0) {
@@ -1128,14 +1210,42 @@ export function renderGame(
     ctx.globalAlpha = 1;
   });
 
-  // Draw projectiles
+  // Draw projectiles - small sprinkle shapes
   projectiles.forEach(projectile => {
     ctx.fillStyle = projectile.color;
     ctx.shadowColor = projectile.color;
-    ctx.shadowBlur = 10;
-    ctx.beginPath();
-    ctx.arc(projectile.position.x, projectile.position.y, projectile.radius, 0, Math.PI * 2);
-    ctx.fill();
+    ctx.shadowBlur = 6;
+    
+    ctx.save();
+    ctx.translate(projectile.position.x, projectile.position.y);
+    
+    // Rotate in direction of travel
+    const angle = Math.atan2(projectile.velocity.y, projectile.velocity.x);
+    ctx.rotate(angle);
+    
+    if (projectile.orbit) {
+      // Orbit projectiles are small glowing orbs
+      ctx.beginPath();
+      ctx.arc(0, 0, 6, 0, Math.PI * 2);
+      ctx.fill();
+    } else {
+      // Regular projectiles are small elongated sprinkles
+      const length = 8;
+      const width = 2;
+      ctx.beginPath();
+      ctx.ellipse(0, 0, length, width, 0, 0, Math.PI * 2);
+      ctx.fill();
+      
+      // Bright core
+      ctx.fillStyle = '#ffffff';
+      ctx.globalAlpha = 0.8;
+      ctx.beginPath();
+      ctx.ellipse(0, 0, length * 0.5, width * 0.5, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.globalAlpha = 1;
+    }
+    
+    ctx.restore();
     ctx.shadowBlur = 0;
   });
 
