@@ -152,6 +152,26 @@ export interface GameState {
   availableUpgrades: Upgrade[];
   waveAnnounceTime?: number;
   screenFlash?: number;
+  slowMoUntil?: number;
+  slowMoFactor?: number;
+  // Stats tracking
+  totalDamageDealt: number;
+  totalDamageTaken: number;
+  startTime: number;
+  peakMultiplier: number;
+  // Arena
+  arena: ArenaType;
+}
+
+export type ArenaType = 'void' | 'grid' | 'cyber' | 'neon';
+
+export interface Achievement {
+  id: string;
+  name: string;
+  description: string;
+  icon: string;
+  unlocked: boolean;
+  unlockedAt?: number;
 }
 
 export interface GameConfig {

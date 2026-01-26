@@ -3,6 +3,13 @@
 import { useState, useEffect, useRef } from 'react';
 import { LeaderboardEntry } from '@/types/game';
 
+function formatTime(ms: number): string {
+  const seconds = Math.floor(ms / 1000);
+  const minutes = Math.floor(seconds / 60);
+  const secs = seconds % 60;
+  return `${minutes}:${secs.toString().padStart(2, '0')}`;
+}
+
 interface GameOverProps {
   score: number;
   wave: number;
@@ -10,6 +17,13 @@ interface GameOverProps {
   playerName: string;
   onPlayAgain: () => void;
   onBackToMenu: () => void;
+  stats?: {
+    totalDamageDealt: number;
+    totalDamageTaken: number;
+    survivalTime: number;
+    peakMultiplier: number;
+    weaponLevels: { type: string; level: number }[];
+  };
 }
 
 export default function GameOver({
@@ -19,6 +33,7 @@ export default function GameOver({
   playerName,
   onPlayAgain,
   onBackToMenu,
+  stats,
 }: GameOverProps) {
   const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -110,6 +125,45 @@ export default function GameOver({
           <div className="text-center mb-6">
             <span className="font-mono text-sm text-white/60">Your rank: </span>
             <span className="font-display text-2xl text-electric-yellow">#{playerRank}</span>
+          </div>
+        )}
+
+        {/* Detailed Stats */}
+        {stats && (
+          <div className="mb-6 p-4 border border-white/10 bg-brutal-dark">
+            <div className="font-mono text-xs text-white/40 uppercase tracking-wider mb-3">Battle Stats</div>
+            <div className="grid grid-cols-2 gap-x-6 gap-y-2 text-sm font-mono">
+              <div className="flex justify-between">
+                <span className="text-white/60">Damage Dealt</span>
+                <span className="text-electric-pink">{Math.floor(stats.totalDamageDealt).toLocaleString()}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-white/60">Damage Taken</span>
+                <span className="text-orange-400">{Math.floor(stats.totalDamageTaken).toLocaleString()}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-white/60">Time Survived</span>
+                <span className="text-electric-cyan">{formatTime(stats.survivalTime)}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-white/60">Peak Multiplier</span>
+                <span className="text-electric-yellow">×{stats.peakMultiplier.toFixed(1)}</span>
+              </div>
+            </div>
+            
+            {/* Weapon levels */}
+            {stats.weaponLevels.length > 0 && (
+              <div className="mt-4 pt-3 border-t border-white/10">
+                <div className="font-mono text-xs text-white/40 uppercase tracking-wider mb-2">Weapons</div>
+                <div className="flex flex-wrap gap-2">
+                  {stats.weaponLevels.map((w) => (
+                    <div key={w.type} className="px-2 py-1 bg-white/5 border border-white/10 text-xs font-mono">
+                      {w.type.toUpperCase()} <span className="text-electric-cyan">Lv{w.level}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         )}
 

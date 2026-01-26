@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState, useCallback } from 'react';
-import { GameState, DEFAULT_CONFIG, Vector2 } from '@/types/game';
+import { GameState, DEFAULT_CONFIG, Vector2, ArenaType } from '@/types/game';
 import {
   createInitialGameState,
   loadPlayerImage,
@@ -13,14 +13,23 @@ import {
 } from '@/lib/gameEngine';
 import { Upgrade } from '@/types/game';
 
+interface GameOverStats {
+  totalDamageDealt: number;
+  totalDamageTaken: number;
+  survivalTime: number;
+  peakMultiplier: number;
+  weaponLevels: { type: string; level: number }[];
+}
+
 interface GameProps {
   playerImageUrl: string;
   playerName: string;
-  onGameOver: (score: number, wave: number, kills: number) => void;
+  arena?: ArenaType;
+  onGameOver: (score: number, wave: number, kills: number, stats?: GameOverStats) => void;
   onBack: () => void;
 }
 
-export default function Game({ playerImageUrl, playerName, onGameOver, onBack }: GameProps) {
+export default function Game({ playerImageUrl, playerName, arena = 'grid', onGameOver, onBack }: GameProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const gameStateRef = useRef<GameState | null>(null);
@@ -73,12 +82,13 @@ export default function Game({ playerImageUrl, playerName, onGameOver, onBack }:
     setIsLoading(true);
     
     let state = createInitialGameState(playerImageUrl, dimensions.width, dimensions.height, DEFAULT_CONFIG);
+    state = { ...state, arena };
     state = await loadPlayerImage(state);
     state = startGame(state);
     
     gameStateRef.current = state;
     setIsLoading(false);
-  }, [playerImageUrl, dimensions]);
+  }, [playerImageUrl, dimensions, arena]);
 
   useEffect(() => {
     if (dimensions.width > 0 && dimensions.height > 0) {
@@ -273,10 +283,18 @@ export default function Game({ playerImageUrl, playerName, onGameOver, onBack }:
 
       // Check game over
       if (gameStateRef.current.isGameOver) {
+        const gs = gameStateRef.current;
         onGameOver(
-          gameStateRef.current.score,
-          gameStateRef.current.wave,
-          gameStateRef.current.player.kills
+          gs.score,
+          gs.wave,
+          gs.player.kills,
+          {
+            totalDamageDealt: gs.totalDamageDealt,
+            totalDamageTaken: gs.totalDamageTaken,
+            survivalTime: Date.now() - gs.startTime,
+            peakMultiplier: gs.peakMultiplier,
+            weaponLevels: gs.player.weapons.map(w => ({ type: w.type, level: w.level })),
+          }
         );
         return;
       }

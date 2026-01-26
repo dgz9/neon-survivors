@@ -11,7 +11,19 @@ export default function Home() {
   const [phase, setPhase] = useState<GamePhase>('menu');
   const [playerImageUrl, setPlayerImageUrl] = useState('');
   const [playerName, setPlayerName] = useState('');
-  const [gameStats, setGameStats] = useState({ score: 0, wave: 1, kills: 0 });
+  const [gameStats, setGameStats] = useState<{
+    score: number;
+    wave: number;
+    kills: number;
+    stats?: {
+      totalDamageDealt: number;
+      totalDamageTaken: number;
+      survivalTime: number;
+      peakMultiplier: number;
+      weaponLevels: { type: string; level: number }[];
+    };
+  }>({ score: 0, wave: 1, kills: 0 });
+  const [selectedArena, setSelectedArena] = useState<'void' | 'grid' | 'cyber' | 'neon'>('grid');
 
   const handleStartGame = useCallback((imageUrl: string, name: string) => {
     setPlayerImageUrl(imageUrl);
@@ -19,8 +31,14 @@ export default function Home() {
     setPhase('playing');
   }, []);
 
-  const handleGameOver = useCallback((score: number, wave: number, kills: number) => {
-    setGameStats({ score, wave, kills });
+  const handleGameOver = useCallback((score: number, wave: number, kills: number, stats?: {
+    totalDamageDealt: number;
+    totalDamageTaken: number;
+    survivalTime: number;
+    peakMultiplier: number;
+    weaponLevels: { type: string; level: number }[];
+  }) => {
+    setGameStats({ score, wave, kills, stats });
     setPhase('gameover');
   }, []);
 
@@ -71,6 +89,39 @@ export default function Home() {
 
           {/* Avatar selector */}
           <AvatarSelector onSelect={handleStartGame} />
+
+          {/* Arena Selection */}
+          <div className="w-full max-w-2xl mt-8">
+            <div className="flex items-center gap-3 mb-4">
+              <span className="text-electric-pink font-display text-2xl">◆</span>
+              <div className="h-[1px] flex-1 bg-white/10" />
+              <span className="font-mono text-xs text-white/40 uppercase tracking-wider">Select Arena</span>
+            </div>
+            
+            <div className="grid grid-cols-4 gap-3">
+              {[
+                { id: 'void', name: 'Void', desc: 'Empty space', color: 'white' },
+                { id: 'grid', name: 'Grid', desc: 'Classic neon', color: 'yellow' },
+                { id: 'cyber', name: 'Cyber', desc: 'Hex pattern', color: 'cyan' },
+                { id: 'neon', name: 'Neon', desc: 'Radial waves', color: 'pink' },
+              ].map((arena) => (
+                <button
+                  key={arena.id}
+                  onClick={() => setSelectedArena(arena.id as typeof selectedArena)}
+                  className={`p-3 border-2 transition-all ${
+                    selectedArena === arena.id
+                      ? `border-electric-${arena.color} bg-electric-${arena.color}/10`
+                      : 'border-white/20 hover:border-white/40'
+                  }`}
+                >
+                  <div className={`font-mono text-sm ${selectedArena === arena.id ? `text-electric-${arena.color}` : 'text-white/80'}`}>
+                    {arena.name}
+                  </div>
+                  <div className="font-mono text-[10px] text-white/40">{arena.desc}</div>
+                </button>
+              ))}
+            </div>
+          </div>
 
           {/* How to play */}
           <div className="w-full max-w-2xl mt-12 mb-8">
@@ -132,6 +183,7 @@ export default function Home() {
         <Game
           playerImageUrl={playerImageUrl}
           playerName={playerName}
+          arena={selectedArena}
           onGameOver={handleGameOver}
           onBack={handleBackToMenu}
         />
@@ -145,6 +197,7 @@ export default function Home() {
           playerName={playerName}
           onPlayAgain={handlePlayAgain}
           onBackToMenu={handleBackToMenu}
+          stats={gameStats.stats}
         />
       )}
     </div>

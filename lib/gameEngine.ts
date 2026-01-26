@@ -9,6 +9,7 @@ import {
   Particle,
   Vector2,
   Upgrade,
+  ArenaType,
   DEFAULT_CONFIG,
   ENEMY_CONFIGS,
   WEAPON_CONFIGS,
@@ -88,6 +89,11 @@ export function createInitialGameState(
     screenShake: 0,
     pendingLevelUps: 0,
     availableUpgrades: [],
+    totalDamageDealt: 0,
+    totalDamageTaken: 0,
+    startTime: Date.now(),
+    peakMultiplier: 1,
+    arena: 'grid',
   };
 }
 
@@ -135,11 +141,17 @@ export function updateGameState(
   }
 
   const currentTime = Date.now();
+  
+  // Apply slow-mo effect
+  let effectiveDelta = deltaTime;
+  if (state.slowMoUntil && currentTime < state.slowMoUntil) {
+    effectiveDelta *= state.slowMoFactor || 0.3;
+  }
   let { player, enemies, projectiles, powerups, experienceOrbs, particles, score, multiplier, multiplierTimer, screenShake } = state;
 
   // Update player position based on input
   const oldPos = { ...player.position };
-  player = updatePlayer(player, input, width, height, config, deltaTime);
+  player = updatePlayer(player, input, width, height, config, effectiveDelta);
   
   // Player movement trail particles
   const moveSpeed = Math.sqrt(player.velocity.x ** 2 + player.velocity.y ** 2);
@@ -165,7 +177,7 @@ export function updateGameState(
 
   // Update projectiles
   projectiles = projectiles
-    .map(p => updateProjectile(p, deltaTime, player.position))
+    .map(p => updateProjectile(p, effectiveDelta, player.position))
     .filter(p => isProjectileAlive(p, width, height));
 
   // Check projectile-enemy collisions
@@ -269,7 +281,7 @@ export function updateGameState(
   }
 
   // Update enemies
-  enemies = enemies.map(e => updateEnemy(e, player, deltaTime, currentTime));
+  enemies = enemies.map(e => updateEnemy(e, player, effectiveDelta, currentTime));
 
   // Check enemy-player collision
   const collision = checkEnemyPlayerCollision(enemies, player, currentTime);
@@ -280,7 +292,11 @@ export function updateGameState(
       invulnerableUntil: currentTime + 1000,
     };
     screenShake = 20;
-    state = { ...state, screenFlash: currentTime };
+    state = { 
+      ...state, 
+      screenFlash: currentTime,
+      totalDamageTaken: state.totalDamageTaken + collision.damage,
+    };
     
     // Crash/damage particles - big impact effect
     particles = [...particles, ...createExplosion(player.position, COLORS.pink, 35)];
@@ -353,13 +369,20 @@ export function updateGameState(
     const xpResult = addExperience(player, collectedXP, config);
     player = xpResult.player;
     if (xpResult.leveledUp) {
-      // Queue level up selection
+      // Queue level up selection with slow-mo
       state = {
         ...state,
         pendingLevelUps: state.pendingLevelUps + 1,
         availableUpgrades: state.availableUpgrades.length === 0 ? generateUpgrades(player) : state.availableUpgrades,
+        slowMoUntil: currentTime + 500,
+        slowMoFactor: 0.3,
       };
     }
+  }
+  
+  // Track peak multiplier
+  if (multiplier > state.peakMultiplier) {
+    state = { ...state, peakMultiplier: multiplier };
   }
 
   // Collect powerups
@@ -425,7 +448,7 @@ export function updateGameState(
 
   // Update particles
   particles = particles
-    .map(p => updateParticle(p, deltaTime))
+    .map(p => updateParticle(p, effectiveDelta))
     .filter(p => p.life > 0);
 
   // Decay screen shake
@@ -625,6 +648,9 @@ function checkProjectileCollisions(
         // Hit!
         projectile.hitEnemies.add(enemy.id);
         enemy.health -= projectile.damage;
+
+        // Track damage dealt
+        state = { ...state, totalDamageDealt: state.totalDamageDealt + projectile.damage };
 
         // Create damage number particle
         damageParticles.push({
@@ -1315,6 +1341,88 @@ function updateParticle(particle: Particle, deltaTime: number): Particle {
   };
 }
 
+function drawArenaBackground(ctx: CanvasRenderingContext2D, arena: ArenaType, width: number, height: number, time: number) {
+  const gridSize = 50;
+  
+  switch (arena) {
+    case 'void':
+      // Pure black with subtle moving stars
+      for (let i = 0; i < 50; i++) {
+        const x = (i * 73 + time * 0.01) % width;
+        const y = (i * 97) % height;
+        const alpha = 0.2 + Math.sin(time * 0.002 + i) * 0.15;
+        ctx.fillStyle = `rgba(255, 255, 255, ${alpha})`;
+        ctx.fillRect(x, y, 2, 2);
+      }
+      break;
+      
+    case 'grid':
+      // Classic neon grid
+      ctx.strokeStyle = 'rgba(228, 255, 26, 0.03)';
+      ctx.lineWidth = 1;
+      for (let x = 0; x < width; x += gridSize) {
+        ctx.beginPath();
+        ctx.moveTo(x, 0);
+        ctx.lineTo(x, height);
+        ctx.stroke();
+      }
+      for (let y = 0; y < height; y += gridSize) {
+        ctx.beginPath();
+        ctx.moveTo(0, y);
+        ctx.lineTo(width, y);
+        ctx.stroke();
+      }
+      break;
+      
+    case 'cyber':
+      // Hexagonal pattern
+      ctx.strokeStyle = 'rgba(0, 240, 255, 0.04)';
+      ctx.lineWidth = 1;
+      const hexSize = 40;
+      const hexHeight = hexSize * Math.sqrt(3);
+      for (let row = -1; row < height / hexHeight + 1; row++) {
+        for (let col = -1; col < width / (hexSize * 1.5) + 1; col++) {
+          const x = col * hexSize * 1.5;
+          const y = row * hexHeight + (col % 2) * hexHeight / 2;
+          ctx.beginPath();
+          for (let i = 0; i < 6; i++) {
+            const angle = (i / 6) * Math.PI * 2;
+            const hx = x + Math.cos(angle) * hexSize;
+            const hy = y + Math.sin(angle) * hexSize;
+            if (i === 0) ctx.moveTo(hx, hy);
+            else ctx.lineTo(hx, hy);
+          }
+          ctx.closePath();
+          ctx.stroke();
+        }
+      }
+      break;
+      
+    case 'neon':
+      // Animated concentric circles
+      ctx.strokeStyle = 'rgba(255, 45, 106, 0.03)';
+      ctx.lineWidth = 2;
+      const centerX = width / 2;
+      const centerY = height / 2;
+      const maxRadius = Math.sqrt(centerX * centerX + centerY * centerY);
+      for (let r = (time * 0.02) % 100; r < maxRadius; r += 100) {
+        ctx.beginPath();
+        ctx.arc(centerX, centerY, r, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+      // Add radial lines
+      ctx.strokeStyle = 'rgba(191, 95, 255, 0.02)';
+      for (let i = 0; i < 12; i++) {
+        const angle = (i / 12) * Math.PI * 2 + time * 0.0005;
+        ctx.beginPath();
+        ctx.moveTo(centerX, centerY);
+        ctx.lineTo(centerX + Math.cos(angle) * maxRadius, centerY + Math.sin(angle) * maxRadius);
+        ctx.stroke();
+      }
+      break;
+  }
+}
+
 // Render functions
 export function renderGame(
   ctx: CanvasRenderingContext2D,
@@ -1334,26 +1442,11 @@ export function renderGame(
     );
   }
 
-  // Clear and draw background
+  // Clear and draw background based on arena type
   ctx.fillStyle = COLORS.black;
   ctx.fillRect(0, 0, width, height);
 
-  // Draw grid
-  ctx.strokeStyle = 'rgba(228, 255, 26, 0.03)';
-  ctx.lineWidth = 1;
-  const gridSize = 50;
-  for (let x = 0; x < width; x += gridSize) {
-    ctx.beginPath();
-    ctx.moveTo(x, 0);
-    ctx.lineTo(x, height);
-    ctx.stroke();
-  }
-  for (let y = 0; y < height; y += gridSize) {
-    ctx.beginPath();
-    ctx.moveTo(0, y);
-    ctx.lineTo(width, y);
-    ctx.stroke();
-  }
+  drawArenaBackground(ctx, state.arena, width, height, time);
 
   // Draw experience orbs - diamond shape with glow to distinguish from projectiles
   experienceOrbs.forEach(orb => {
@@ -1728,6 +1821,16 @@ function renderUI(ctx: CanvasRenderingContext2D, state: GameState, width: number
 
   // Level
   ctx.fillText(`LVL ${player.level}`, width - 20, 55);
+
+  // Weapons display (right side)
+  ctx.textAlign = 'right';
+  ctx.font = '12px "JetBrains Mono", monospace';
+  player.weapons.forEach((weapon, idx) => {
+    const config = WEAPON_CONFIGS[weapon.type];
+    const y = 80 + idx * 22;
+    ctx.fillStyle = config.color;
+    ctx.fillText(`${weapon.type.toUpperCase()} Lv${weapon.level}`, width - 20, y);
+  });
 
   // Health bar
   const healthBarWidth = 200;
