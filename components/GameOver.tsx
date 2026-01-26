@@ -23,7 +23,7 @@ interface GameOverProps {
     survivalTime: number;
     peakMultiplier: number;
     weaponLevels: { type: string; level: number }[];
-    newAchievements?: { id: string; name: string; icon: string }[];
+    newAchievements?: { id: string; name: string; icon: string; description?: string }[];
   };
 }
 
@@ -95,8 +95,8 @@ export default function GameOver({
   }, []);
 
   return (
-    <div className="fixed inset-0 bg-brutal-black/95 flex items-center justify-center p-4 z-50">
-      <div className="w-full max-w-lg">
+    <div className="fixed inset-0 bg-brutal-black/95 flex items-center justify-center p-4 z-50 overflow-y-auto">
+      <div className="w-full max-w-lg my-8">
         {/* Game Over Header */}
         <div className="text-center mb-8">
           <div className="font-display text-6xl sm:text-8xl text-electric-pink mb-2 glitch-text" data-text="GAME OVER">
@@ -172,9 +172,20 @@ export default function GameOver({
                 <div className="font-mono text-xs text-electric-yellow uppercase tracking-wider mb-2">🏆 Achievements Unlocked!</div>
                 <div className="flex flex-wrap gap-2">
                   {stats.newAchievements.map((a) => (
-                    <div key={a.id} className="px-3 py-2 bg-electric-yellow/10 border border-electric-yellow/30 text-sm font-mono flex items-center gap-2">
+                    <div 
+                      key={a.id} 
+                      className="px-3 py-2 bg-electric-yellow/10 border border-electric-yellow/30 text-sm font-mono flex items-center gap-2 relative group cursor-help"
+                      title={a.description}
+                    >
                       <span>{a.icon}</span>
                       <span className="text-electric-yellow">{a.name}</span>
+                      {/* Tooltip */}
+                      {a.description && (
+                        <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-3 py-2 bg-brutal-black border border-white/20 text-xs text-white/80 whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-10">
+                          {a.description}
+                          <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-white/20" />
+                        </div>
+                      )}
                     </div>
                   ))}
                 </div>

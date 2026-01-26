@@ -21,7 +21,7 @@ interface GameOverStats {
   survivalTime: number;
   peakMultiplier: number;
   weaponLevels: { type: string; level: number }[];
-  newAchievements?: { id: string; name: string; icon: string }[];
+  newAchievements?: { id: string; name: string; icon: string; description: string }[];
 }
 
 interface GameProps {
