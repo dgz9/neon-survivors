@@ -41,6 +41,9 @@ export default function Game({ playerImageUrl, playerName, onGameOver, onBack }:
     health: number;
     maxHealth: number;
     level: number;
+    speedBonus: number;
+    magnetBonus: number;
+    activeBuffs: { type: string; remainingMs: number }[];
   } | null>(null);
   const [showUpgrades, setShowUpgrades] = useState(false);
   const [availableUpgrades, setAvailableUpgrades] = useState<Upgrade[]>([]);
@@ -245,12 +248,19 @@ export default function Game({ playerImageUrl, playerName, onGameOver, onBack }:
 
         // Update display state periodically
         if (Math.floor(timestamp) % 100 < 17) {
+          const now = Date.now();
           setDisplayState({
             score: gameStateRef.current.score,
             wave: gameStateRef.current.wave,
             health: gameStateRef.current.player.health,
             maxHealth: gameStateRef.current.player.maxHealth,
             level: gameStateRef.current.player.level,
+            speedBonus: gameStateRef.current.player.speedBonus,
+            magnetBonus: gameStateRef.current.player.magnetBonus,
+            activeBuffs: gameStateRef.current.player.activeBuffs.map(b => ({
+              type: b.type,
+              remainingMs: Math.max(0, b.expiresAt - now),
+            })),
           });
         }
 
@@ -404,6 +414,53 @@ export default function Game({ playerImageUrl, playerName, onGameOver, onBack }:
           height={dimensions.height}
           className="w-full h-full"
         />
+
+        {/* Stats display - permanent bonuses and active buffs */}
+        {displayState && !isLoading && (
+          <div className="absolute top-2 left-2 flex flex-col gap-1 text-xs font-mono z-10">
+            {/* Permanent stat bonuses */}
+            {displayState.speedBonus > 0 && (
+              <div className="flex items-center gap-2 bg-brutal-dark/80 px-2 py-1 border border-yellow-400/30">
+                <span>⚡</span>
+                <span className="text-yellow-400">Speed +{Math.round(displayState.speedBonus / 0.5)}</span>
+              </div>
+            )}
+            {displayState.magnetBonus > 0 && (
+              <div className="flex items-center gap-2 bg-brutal-dark/80 px-2 py-1 border border-purple-400/30">
+                <span>🧲</span>
+                <span className="text-purple-400">Magnet +{Math.round(displayState.magnetBonus / 0.3)}</span>
+              </div>
+            )}
+            
+            {/* Active temporary buffs with timer bars */}
+            {displayState.activeBuffs.map((buff) => {
+              const maxDuration = buff.type === 'magnet' ? 15000 : 10000;
+              const percent = (buff.remainingMs / maxDuration) * 100;
+              const colors: Record<string, string> = {
+                speed: 'bg-yellow-400',
+                damage: 'bg-pink-400',
+                magnet: 'bg-purple-400',
+              };
+              const icons: Record<string, string> = {
+                speed: '⚡',
+                damage: '💥',
+                magnet: '🧲',
+              };
+              return (
+                <div key={buff.type} className="flex items-center gap-2 bg-brutal-dark/80 px-2 py-1 border border-white/20">
+                  <span>{icons[buff.type]}</span>
+                  <div className="w-16 h-2 bg-white/10 overflow-hidden">
+                    <div 
+                      className={`h-full ${colors[buff.type]} transition-all duration-100`}
+                      style={{ width: `${percent}%` }}
+                    />
+                  </div>
+                  <span className="text-white/60 w-8">{Math.ceil(buff.remainingMs / 1000)}s</span>
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
 
       {/* Powerup Legend */}

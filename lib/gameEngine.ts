@@ -47,6 +47,7 @@ export function createInitialGameState(
     color: COLORS.cyan,
     health: config.playerMaxHealth,
     maxHealth: config.playerMaxHealth,
+    baseSpeed: config.playerSpeed,
     speed: config.playerSpeed,
     image: null,
     imageUrl: playerImageUrl,
@@ -60,6 +61,10 @@ export function createInitialGameState(
     experience: 0,
     level: 1,
     kills: 0,
+    magnetMultiplier: 1,
+    activeBuffs: [],
+    speedBonus: 0,
+    magnetBonus: 0,
   };
 
   return {
@@ -309,8 +314,11 @@ export function updateGameState(
   particles = [...particles, ...powerupParticles];
   
   collectedPowerups.forEach(powerup => {
-    player = applyPowerup(player, powerup, state);
+    player = applyPowerup(player, powerup, currentTime);
   });
+  
+  // Update buff timers and recalculate stats
+  player = updatePlayerBuffs(player, currentTime);
 
   // Spawn enemies - more frequent and in groups as waves progress
   const spawnInterval = config.enemySpawnRate / (1 + state.wave * 0.2);
@@ -400,6 +408,10 @@ function updatePlayer(
 
 function fireWeapons(player: Player, mousePos: Vector2, currentTime: number): Projectile[] {
   const projectiles: Projectile[] = [];
+  
+  // Check for damage buff
+  const damageBuff = player.activeBuffs.find(b => b.type === 'damage');
+  const damageMultiplier = damageBuff ? damageBuff.multiplier : 1;
 
   player.weapons.forEach(weapon => {
     if (currentTime - weapon.lastFired < weapon.fireRate) return;
@@ -417,7 +429,7 @@ function fireWeapons(player: Player, mousePos: Vector2, currentTime: number): Pr
           velocity: { x: 0, y: 0 },
           radius: 10 + weapon.level * 2,
           color: config.color,
-          damage: weapon.damage * (1 + (weapon.level - 1) * 0.3),
+          damage: weapon.damage * (1 + (weapon.level - 1) * 0.3) * damageMultiplier,
           isEnemy: false,
           piercing: 999,
           hitEnemies: new Set(),
@@ -454,7 +466,7 @@ function fireWeapons(player: Player, mousePos: Vector2, currentTime: number): Pr
         },
         radius: weapon.type === 'missile' ? 10 : 6,
         color: config.color,
-        damage: weapon.damage * (1 + (weapon.level - 1) * 0.2),
+        damage: weapon.damage * (1 + (weapon.level - 1) * 0.2) * damageMultiplier,
         isEnemy: false,
         piercing: weapon.piercing,
         hitEnemies: new Set(),
@@ -997,12 +1009,12 @@ export function applyUpgrade(state: GameState, upgrade: Upgrade): GameState {
         };
         break;
       case 'speed':
-        // Cap speed at 8 to keep it controllable, smaller boost
-        player = { ...player, speed: Math.min(8, player.speed * 1.1) };
+        // Permanent speed bonus from level-up (capped via updatePlayerBuffs)
+        player = { ...player, speedBonus: player.speedBonus + 0.5 };
         break;
       case 'magnet':
-        // Magnet range is in config, we'll track it on player
-        player = { ...player, magnetMultiplier: (player.magnetMultiplier || 1) * 1.3 };
+        // Permanent magnet range bonus from level-up
+        player = { ...player, magnetBonus: player.magnetBonus + 0.3 };
         break;
     }
   }
@@ -1056,22 +1068,60 @@ function collectPowerups(
   return { collectedPowerups, remainingPowerups, powerupParticles };
 }
 
-function applyPowerup(player: Player, powerup: PowerUp, state: GameState): Player {
+function applyPowerup(player: Player, powerup: PowerUp, currentTime: number): Player {
+  const duration = POWERUP_CONFIGS[powerup.type].duration;
+  
   switch (powerup.type) {
     case 'health':
       return { ...player, health: Math.min(player.maxHealth, player.health + 25) };
     case 'speed':
-      return { ...player, speed: player.speed * 1.5 }; // Temporary boost
+      return {
+        ...player,
+        activeBuffs: [
+          ...player.activeBuffs.filter(b => b.type !== 'speed'),
+          { type: 'speed', expiresAt: currentTime + duration, multiplier: 1.5 }
+        ],
+      };
     case 'damage':
       return {
         ...player,
-        weapons: player.weapons.map(w => ({ ...w, damage: w.damage * 1.5 })),
+        activeBuffs: [
+          ...player.activeBuffs.filter(b => b.type !== 'damage'),
+          { type: 'damage', expiresAt: currentTime + duration, multiplier: 1.5 }
+        ],
+      };
+    case 'magnet':
+      return {
+        ...player,
+        activeBuffs: [
+          ...player.activeBuffs.filter(b => b.type !== 'magnet'),
+          { type: 'magnet', expiresAt: currentTime + duration, multiplier: 3 }
+        ],
       };
     case 'xp':
       return addExperience(player, 50, DEFAULT_CONFIG).player;
     default:
       return player;
   }
+}
+
+function updatePlayerBuffs(player: Player, currentTime: number): Player {
+  // Remove expired buffs
+  const activeBuffs = player.activeBuffs.filter(b => b.expiresAt > currentTime);
+  
+  // Calculate effective stats
+  const speedBuff = activeBuffs.find(b => b.type === 'speed');
+  const magnetBuff = activeBuffs.find(b => b.type === 'magnet');
+  
+  const effectiveSpeed = Math.min(8, (player.baseSpeed + player.speedBonus) * (speedBuff?.multiplier || 1));
+  const effectiveMagnet = (1 + player.magnetBonus) * (magnetBuff?.multiplier || 1);
+  
+  return {
+    ...player,
+    activeBuffs,
+    speed: effectiveSpeed,
+    magnetMultiplier: effectiveMagnet,
+  };
 }
 
 function createExplosion(position: Vector2, color: string, count: number): Particle[] {

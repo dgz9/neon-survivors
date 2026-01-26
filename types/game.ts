@@ -5,6 +5,12 @@ export interface Vector2 {
   y: number;
 }
 
+export interface ActiveBuff {
+  type: 'speed' | 'damage' | 'magnet';
+  expiresAt: number;
+  multiplier: number;
+}
+
 export interface Player {
   position: Vector2;
   velocity: Vector2;
@@ -12,6 +18,7 @@ export interface Player {
   color: string;
   health: number;
   maxHealth: number;
+  baseSpeed: number;
   speed: number;
   image: HTMLImageElement | null;
   imageUrl: string;
@@ -20,7 +27,11 @@ export interface Player {
   experience: number;
   level: number;
   kills: number;
-  magnetMultiplier?: number;
+  magnetMultiplier: number;
+  activeBuffs: ActiveBuff[];
+  // Permanent stat upgrades from level-ups
+  speedBonus: number;
+  magnetBonus: number;
 }
 
 export interface Enemy {
