@@ -1330,6 +1330,8 @@ function createExplosion(position: Vector2, color: string, count: number): Parti
 }
 
 function updateParticle(particle: Particle, deltaTime: number): Particle {
+  const newLife = particle.life - deltaTime * 16;
+  const lifeRatio = Math.max(0, newLife / particle.maxLife);
   return {
     ...particle,
     position: {
@@ -1340,8 +1342,8 @@ function updateParticle(particle: Particle, deltaTime: number): Particle {
       x: particle.velocity.x * 0.98,
       y: particle.velocity.y * 0.98,
     },
-    life: particle.life - deltaTime * 16,
-    size: particle.size * (particle.life / particle.maxLife),
+    life: newLife,
+    size: Math.max(0.1, particle.size * lifeRatio),
   };
 }
 
@@ -1526,15 +1528,17 @@ export function renderGame(
       ctx.shadowColor = particle.color;
       ctx.shadowBlur = 6;
       ctx.beginPath();
-      ctx.arc(particle.position.x, particle.position.y, particle.size * 0.5, 0, Math.PI * 2);
+      const sparkRadius = Math.max(0.1, particle.size * 0.5);
+      ctx.arc(particle.position.x, particle.position.y, sparkRadius, 0, Math.PI * 2);
       ctx.fill();
       ctx.shadowBlur = 0;
     } else if (particle.type === 'ring') {
       // Expanding ring
       ctx.strokeStyle = particle.color;
-      ctx.lineWidth = 2 * alpha;
+      ctx.lineWidth = Math.max(0.1, 2 * alpha);
       ctx.beginPath();
-      ctx.arc(particle.position.x, particle.position.y, particle.size * (1 - alpha) * 3, 0, Math.PI * 2);
+      const ringRadius = Math.max(0.1, particle.size * (1 - alpha) * 3);
+      ctx.arc(particle.position.x, particle.position.y, ringRadius, 0, Math.PI * 2);
       ctx.stroke();
     } else {
       // Default explosion particle - square with glow
