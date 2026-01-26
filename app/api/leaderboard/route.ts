@@ -1,15 +1,17 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { kv } from '@vercel/kv';
 
-// In-memory leaderboard (in production, use a database)
-// This will reset on server restart
-let leaderboard: {
+const LEADERBOARD_KEY = 'neon-survivors:leaderboard';
+const MAX_ENTRIES = 100;
+
+interface LeaderboardEntry {
   id: string;
   name: string;
   score: number;
   wave: number;
   kills: number;
   timestamp: number;
-}[] = [];
+}
 
 // Generate unique ID
 function generateId() {
@@ -17,12 +19,23 @@ function generateId() {
 }
 
 export async function GET() {
-  // Sort by score descending
-  const sortedLeaderboard = [...leaderboard].sort((a, b) => b.score - a.score);
-  
-  return NextResponse.json({
-    entries: sortedLeaderboard.slice(0, 100), // Top 100
-  });
+  try {
+    // Get leaderboard from KV store
+    const entries = await kv.zrange<LeaderboardEntry[]>(
+      LEADERBOARD_KEY, 
+      0, 
+      MAX_ENTRIES - 1, 
+      { rev: true }
+    );
+
+    return NextResponse.json({
+      entries: entries || [],
+    });
+  } catch (error) {
+    console.error('Failed to fetch leaderboard:', error);
+    // Return empty array on error (e.g., KV not configured)
+    return NextResponse.json({ entries: [] });
+  }
 }
 
 export async function POST(request: NextRequest) {
@@ -39,7 +52,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Create entry
-    const entry = {
+    const entry: LeaderboardEntry = {
       id: generateId(),
       name: name.trim(),
       score: Math.floor(score),
@@ -48,25 +61,29 @@ export async function POST(request: NextRequest) {
       timestamp: Date.now(),
     };
 
-    // Add to leaderboard
-    leaderboard.push(entry);
+    // Add to sorted set (score is used for sorting)
+    await kv.zadd(LEADERBOARD_KEY, {
+      score: entry.score,
+      member: JSON.stringify(entry),
+    });
 
-    // Keep only top 1000 entries to prevent memory bloat
-    if (leaderboard.length > 1000) {
-      leaderboard.sort((a, b) => b.score - a.score);
-      leaderboard = leaderboard.slice(0, 1000);
+    // Trim to keep only top entries
+    const count = await kv.zcard(LEADERBOARD_KEY);
+    if (count > MAX_ENTRIES * 2) {
+      // Remove lowest scores
+      await kv.zremrangebyrank(LEADERBOARD_KEY, 0, count - MAX_ENTRIES - 1);
     }
 
     // Calculate rank
-    const sortedLeaderboard = [...leaderboard].sort((a, b) => b.score - a.score);
-    const rank = sortedLeaderboard.findIndex(e => e.id === entry.id) + 1;
+    const rank = await kv.zrevrank(LEADERBOARD_KEY, JSON.stringify(entry));
 
     return NextResponse.json({
       success: true,
       entry,
-      rank,
+      rank: rank !== null ? rank + 1 : null,
     });
   } catch (error) {
+    console.error('Failed to submit score:', error);
     return NextResponse.json({ error: 'Failed to submit score' }, { status: 500 });
   }
 }
