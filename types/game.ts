@@ -1,0 +1,271 @@
+// Game Types for Neon Survivors
+
+export interface Vector2 {
+  x: number;
+  y: number;
+}
+
+export interface Player {
+  position: Vector2;
+  velocity: Vector2;
+  radius: number;
+  color: string;
+  health: number;
+  maxHealth: number;
+  speed: number;
+  image: HTMLImageElement | null;
+  imageUrl: string;
+  invulnerableUntil: number;
+  weapons: Weapon[];
+  experience: number;
+  level: number;
+  kills: number;
+}
+
+export interface Enemy {
+  id: string;
+  position: Vector2;
+  velocity: Vector2;
+  radius: number;
+  color: string;
+  health: number;
+  maxHealth: number;
+  speed: number;
+  damage: number;
+  type: EnemyType;
+  points: number;
+  spawnTime: number;
+}
+
+export type EnemyType = 'chaser' | 'shooter' | 'tank' | 'swarm' | 'bomber' | 'boss';
+
+export interface Projectile {
+  id: string;
+  position: Vector2;
+  velocity: Vector2;
+  radius: number;
+  color: string;
+  damage: number;
+  isEnemy: boolean;
+  piercing: number;
+  hitEnemies: Set<string>;
+}
+
+export interface Weapon {
+  type: WeaponType;
+  level: number;
+  lastFired: number;
+  fireRate: number; // ms between shots
+  damage: number;
+  projectileSpeed: number;
+  projectileCount: number;
+  piercing: number;
+}
+
+export type WeaponType = 'blaster' | 'spread' | 'laser' | 'orbit' | 'missile';
+
+export interface PowerUp {
+  id: string;
+  position: Vector2;
+  type: PowerUpType;
+  createdAt: number;
+  duration: number;
+}
+
+export type PowerUpType = 'health' | 'speed' | 'damage' | 'magnet' | 'bomb' | 'xp';
+
+export interface ExperienceOrb {
+  id: string;
+  position: Vector2;
+  value: number;
+  createdAt: number;
+}
+
+export interface Particle {
+  id: string;
+  position: Vector2;
+  velocity: Vector2;
+  color: string;
+  size: number;
+  life: number;
+  maxLife: number;
+  type: 'explosion' | 'trail' | 'spark' | 'text';
+  text?: string;
+}
+
+export interface GameState {
+  player: Player;
+  enemies: Enemy[];
+  projectiles: Projectile[];
+  powerups: PowerUp[];
+  experienceOrbs: ExperienceOrb[];
+  particles: Particle[];
+  wave: number;
+  score: number;
+  multiplier: number;
+  multiplierTimer: number;
+  gameTime: number;
+  isRunning: boolean;
+  isPaused: boolean;
+  isGameOver: boolean;
+  lastEnemySpawn: number;
+  enemiesKilledThisWave: number;
+  enemiesRequiredForWave: number;
+  screenShake: number;
+}
+
+export interface GameConfig {
+  playerSpeed: number;
+  playerRadius: number;
+  playerMaxHealth: number;
+  enemySpawnRate: number;
+  baseEnemySpeed: number;
+  baseEnemyHealth: number;
+  baseEnemyDamage: number;
+  experienceToLevel: number;
+  powerupSpawnChance: number;
+  magnetRange: number;
+}
+
+export const DEFAULT_CONFIG: GameConfig = {
+  playerSpeed: 5,
+  playerRadius: 24,
+  playerMaxHealth: 100,
+  enemySpawnRate: 2000,
+  baseEnemySpeed: 2,
+  baseEnemyHealth: 30,
+  baseEnemyDamage: 10,
+  experienceToLevel: 100,
+  powerupSpawnChance: 0.15,
+  magnetRange: 100,
+};
+
+export interface LeaderboardEntry {
+  id: string;
+  name: string;
+  score: number;
+  wave: number;
+  kills: number;
+  timestamp: number;
+}
+
+export const ENEMY_CONFIGS: Record<EnemyType, {
+  health: number;
+  speed: number;
+  damage: number;
+  radius: number;
+  points: number;
+  color: string;
+}> = {
+  chaser: {
+    health: 30,
+    speed: 2.5,
+    damage: 10,
+    radius: 16,
+    points: 10,
+    color: '#ff2d6a',
+  },
+  shooter: {
+    health: 25,
+    speed: 1.5,
+    damage: 15,
+    radius: 18,
+    points: 15,
+    color: '#00f0ff',
+  },
+  tank: {
+    health: 100,
+    speed: 1,
+    damage: 20,
+    radius: 28,
+    points: 30,
+    color: '#e4ff1a',
+  },
+  swarm: {
+    health: 10,
+    speed: 4,
+    damage: 5,
+    radius: 10,
+    points: 5,
+    color: '#bf5fff',
+  },
+  bomber: {
+    health: 40,
+    speed: 2,
+    damage: 30,
+    radius: 20,
+    points: 25,
+    color: '#ff6b1a',
+  },
+  boss: {
+    health: 500,
+    speed: 1.5,
+    damage: 25,
+    radius: 48,
+    points: 200,
+    color: '#ff1a4b',
+  },
+};
+
+export const WEAPON_CONFIGS: Record<WeaponType, {
+  fireRate: number;
+  damage: number;
+  projectileSpeed: number;
+  projectileCount: number;
+  piercing: number;
+  color: string;
+}> = {
+  blaster: {
+    fireRate: 300,
+    damage: 15,
+    projectileSpeed: 12,
+    projectileCount: 1,
+    piercing: 0,
+    color: '#00f0ff',
+  },
+  spread: {
+    fireRate: 500,
+    damage: 10,
+    projectileSpeed: 10,
+    projectileCount: 5,
+    piercing: 0,
+    color: '#e4ff1a',
+  },
+  laser: {
+    fireRate: 100,
+    damage: 5,
+    projectileSpeed: 20,
+    projectileCount: 1,
+    piercing: 3,
+    color: '#ff2d6a',
+  },
+  orbit: {
+    fireRate: 1000,
+    damage: 20,
+    projectileSpeed: 0,
+    projectileCount: 4,
+    piercing: 999,
+    color: '#bf5fff',
+  },
+  missile: {
+    fireRate: 1500,
+    damage: 50,
+    projectileSpeed: 6,
+    projectileCount: 1,
+    piercing: 0,
+    color: '#ff6b1a',
+  },
+};
+
+export const POWERUP_CONFIGS: Record<PowerUpType, {
+  color: string;
+  icon: string;
+  duration: number;
+}> = {
+  health: { color: '#39ff14', icon: '❤', duration: 0 },
+  speed: { color: '#e4ff1a', icon: '⚡', duration: 10000 },
+  damage: { color: '#ff2d6a', icon: '💥', duration: 10000 },
+  magnet: { color: '#bf5fff', icon: '🧲', duration: 15000 },
+  bomb: { color: '#ff6b1a', icon: '💣', duration: 0 },
+  xp: { color: '#00f0ff', icon: '✨', duration: 0 },
+};

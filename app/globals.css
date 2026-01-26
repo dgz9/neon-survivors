@@ -1,0 +1,193 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --brutal-black: #0a0a0a;
+  --brutal-dark: #141414;
+  --electric-yellow: #e4ff1a;
+  --electric-pink: #ff2d6a;
+  --electric-cyan: #00f0ff;
+  --electric-green: #39ff14;
+  --electric-purple: #bf5fff;
+  --electric-orange: #ff6b1a;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  background-color: var(--brutal-black);
+  font-family: 'JetBrains Mono', monospace;
+}
+
+/* Font families */
+.font-display {
+  font-family: 'Orbitron', sans-serif;
+}
+
+.font-mono {
+  font-family: 'JetBrains Mono', monospace;
+}
+
+/* Brutal title styling */
+.brutal-title {
+  font-family: 'Orbitron', sans-serif;
+  font-size: clamp(2rem, 8vw, 5rem);
+  font-weight: 900;
+  letter-spacing: -0.02em;
+  line-height: 1;
+  background: linear-gradient(
+    135deg,
+    var(--electric-yellow) 0%,
+    var(--electric-pink) 50%,
+    var(--electric-cyan) 100%
+  );
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  text-shadow: none;
+}
+
+/* Glitch effect */
+.glitch-text {
+  position: relative;
+}
+
+.glitch-text::before,
+.glitch-text::after {
+  content: attr(data-text);
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: var(--brutal-black);
+  -webkit-background-clip: text;
+  background-clip: text;
+}
+
+.glitch-text::before {
+  left: 2px;
+  text-shadow: -2px 0 var(--electric-pink);
+  animation: glitch-anim-1 2s infinite linear alternate-reverse;
+  clip-path: polygon(0 0, 100% 0, 100% 45%, 0 45%);
+}
+
+.glitch-text::after {
+  left: -2px;
+  text-shadow: 2px 0 var(--electric-cyan);
+  animation: glitch-anim-2 3s infinite linear alternate-reverse;
+  clip-path: polygon(0 55%, 100% 55%, 100% 100%, 0 100%);
+}
+
+@keyframes glitch-anim-1 {
+  0%, 100% { transform: translate(0); }
+  20% { transform: translate(-2px, 2px); }
+  40% { transform: translate(2px, -2px); }
+  60% { transform: translate(-1px, 1px); }
+  80% { transform: translate(1px, -1px); }
+}
+
+@keyframes glitch-anim-2 {
+  0%, 100% { transform: translate(0); }
+  20% { transform: translate(2px, -2px); }
+  40% { transform: translate(-2px, 2px); }
+  60% { transform: translate(1px, -1px); }
+  80% { transform: translate(-1px, 1px); }
+}
+
+/* Button styles */
+.btn-brutal {
+  @apply px-6 py-3 font-mono text-sm uppercase tracking-wider;
+  @apply bg-electric-cyan text-brutal-black;
+  @apply border-2 border-transparent;
+  @apply transition-all duration-200;
+}
+
+.btn-brutal:hover {
+  @apply bg-white;
+}
+
+.btn-brutal-outline {
+  @apply px-6 py-3 font-mono text-sm uppercase tracking-wider;
+  @apply bg-transparent text-white/60;
+  @apply border-2 border-white/20;
+  @apply transition-all duration-200;
+}
+
+.btn-brutal-outline:hover {
+  @apply border-white text-white;
+}
+
+/* Canvas container */
+.canvas-container {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+
+.canvas-container canvas {
+  display: block;
+}
+
+/* No select for game elements */
+.no-select {
+  user-select: none;
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--brutal-dark);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--electric-cyan);
+  border-radius: 0;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--electric-pink);
+}
+
+/* Float animation */
+@keyframes float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-10px); }
+}
+
+.animate-float {
+  animation: float 2s ease-in-out infinite;
+}
+
+/* Pulse glow */
+@keyframes pulse-glow {
+  0%, 100% {
+    box-shadow: 0 0 20px var(--electric-cyan),
+                0 0 40px var(--electric-cyan),
+                0 0 60px var(--electric-cyan);
+  }
+  50% {
+    box-shadow: 0 0 30px var(--electric-pink),
+                0 0 60px var(--electric-pink),
+                0 0 90px var(--electric-pink);
+  }
+}
+
+/* Winner overlay */
+.winner-overlay {
+  background: radial-gradient(
+    ellipse at center,
+    rgba(0, 0, 0, 0.9) 0%,
+    rgba(0, 0, 0, 0.95) 100%
+  );
+}
