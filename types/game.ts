@@ -36,9 +36,13 @@ export interface Enemy {
   type: EnemyType;
   points: number;
   spawnTime: number;
+  // Special properties
+  zigzagPhase?: number;
+  ghostAlpha?: number;
+  isSplit?: boolean;
 }
 
-export type EnemyType = 'chaser' | 'shooter' | 'tank' | 'swarm' | 'bomber' | 'boss';
+export type EnemyType = 'chaser' | 'shooter' | 'tank' | 'swarm' | 'bomber' | 'boss' | 'zigzag' | 'splitter' | 'ghost' | 'magnet';
 
 export interface Projectile {
   id: string;
@@ -97,7 +101,7 @@ export interface Particle {
   size: number;
   life: number;
   maxLife: number;
-  type: 'explosion' | 'trail' | 'spark' | 'text';
+  type: 'explosion' | 'trail' | 'spark' | 'text' | 'ring';
   text?: string;
 }
 
@@ -225,6 +229,38 @@ export const ENEMY_CONFIGS: Record<EnemyType, {
     radius: 48,
     points: 200,
     color: '#ff1a4b',
+  },
+  zigzag: {
+    health: 20,
+    speed: 3.5,
+    damage: 8,
+    radius: 14,
+    points: 15,
+    color: '#00ff88',
+  },
+  splitter: {
+    health: 60,
+    speed: 1.8,
+    damage: 12,
+    radius: 22,
+    points: 20,
+    color: '#ff00ff',
+  },
+  ghost: {
+    health: 15,
+    speed: 2,
+    damage: 15,
+    radius: 18,
+    points: 25,
+    color: '#8888ff',
+  },
+  magnet: {
+    health: 45,
+    speed: 1.5,
+    damage: 5,
+    radius: 20,
+    points: 20,
+    color: '#ff4488',
   },
 };
 

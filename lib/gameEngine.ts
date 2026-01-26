@@ -171,8 +171,35 @@ export function updateGameState(
       powerups.push(createPowerup(enemy.position));
     }
 
-    // Death particles
-    particles = [...particles, ...createExplosion(enemy.position, enemy.color, 15)];
+    // Splitter spawns smaller enemies on death
+    if (enemy.type === 'splitter' && !enemy.isSplit) {
+      const splitCount = 2 + Math.floor(Math.random() * 2);
+      for (let i = 0; i < splitCount; i++) {
+        const angle = (i / splitCount) * Math.PI * 2;
+        const splitEnemy: Enemy = {
+          id: generateId(),
+          position: {
+            x: enemy.position.x + Math.cos(angle) * 20,
+            y: enemy.position.y + Math.sin(angle) * 20,
+          },
+          velocity: { x: 0, y: 0 },
+          radius: 10,
+          color: '#ff88ff',
+          health: 15,
+          maxHealth: 15,
+          speed: 4,
+          damage: 5,
+          type: 'swarm',
+          points: 5,
+          spawnTime: currentTime,
+          isSplit: true,
+        };
+        enemies.push(splitEnemy);
+      }
+    }
+
+    // Death particles - more dramatic
+    particles = [...particles, ...createExplosion(enemy.position, enemy.color, 20 + enemy.radius)];
   });
 
   state = { ...state, enemiesKilledThisWave: state.enemiesKilledThisWave + killedEnemies.length };
@@ -183,7 +210,7 @@ export function updateGameState(
   }
 
   // Update enemies
-  enemies = enemies.map(e => updateEnemy(e, player, deltaTime));
+  enemies = enemies.map(e => updateEnemy(e, player, deltaTime, currentTime));
 
   // Check enemy-player collision
   const collision = checkEnemyPlayerCollision(enemies, player, currentTime);
@@ -234,10 +261,15 @@ export function updateGameState(
     player = applyPowerup(player, powerup, state);
   });
 
-  // Spawn enemies
-  if (currentTime - state.lastEnemySpawn > config.enemySpawnRate / (1 + state.wave * 0.1)) {
-    const newEnemy = spawnEnemy(state.wave, width, height, player.position);
-    enemies.push(newEnemy);
+  // Spawn enemies - more frequent and in groups as waves progress
+  const spawnInterval = config.enemySpawnRate / (1 + state.wave * 0.2);
+  if (currentTime - state.lastEnemySpawn > spawnInterval) {
+    // Spawn multiple enemies at higher waves
+    const spawnCount = Math.min(1 + Math.floor(state.wave / 3), 5);
+    for (let i = 0; i < spawnCount; i++) {
+      const newEnemy = spawnEnemy(state.wave, width, height, player.position);
+      enemies.push(newEnemy);
+    }
     state = { ...state, lastEnemySpawn: currentTime };
   }
 
@@ -482,27 +514,51 @@ function checkProjectileCollisions(
   return { updatedEnemies, updatedProjectiles, killedEnemies, damageParticles };
 }
 
-function updateEnemy(enemy: Enemy, player: Player, deltaTime: number): Enemy {
-  // Move towards player
+function updateEnemy(enemy: Enemy, player: Player, deltaTime: number, currentTime: number): Enemy {
   const dx = player.position.x - enemy.position.x;
   const dy = player.position.y - enemy.position.y;
   const distance = Math.sqrt(dx * dx + dy * dy);
 
-  if (distance > 0) {
-    const vx = (dx / distance) * enemy.speed;
-    const vy = (dy / distance) * enemy.speed;
+  if (distance <= 0) return enemy;
 
-    return {
-      ...enemy,
-      position: {
-        x: enemy.position.x + vx * deltaTime,
-        y: enemy.position.y + vy * deltaTime,
-      },
-      velocity: { x: vx, y: vy },
-    };
+  let vx = (dx / distance) * enemy.speed;
+  let vy = (dy / distance) * enemy.speed;
+  let updatedEnemy = { ...enemy };
+
+  // Zigzag movement
+  if (enemy.type === 'zigzag') {
+    const phase = (enemy.zigzagPhase || 0) + deltaTime * 0.15;
+    const perpX = -dy / distance;
+    const perpY = dx / distance;
+    const zigzagAmount = Math.sin(phase) * 3;
+    vx += perpX * zigzagAmount;
+    vy += perpY * zigzagAmount;
+    updatedEnemy.zigzagPhase = phase;
   }
 
-  return enemy;
+  // Ghost fades in and out, phases through when faded
+  if (enemy.type === 'ghost') {
+    const fadeSpeed = 0.002;
+    const timeSinceSpawn = currentTime - enemy.spawnTime;
+    const alpha = 0.3 + Math.sin(timeSinceSpawn * fadeSpeed) * 0.7;
+    updatedEnemy.ghostAlpha = Math.max(0.1, Math.min(1, alpha));
+  }
+
+  // Magnet pulls XP orbs away from player (handled elsewhere)
+  // Just moves slower but steadily
+  if (enemy.type === 'magnet') {
+    vx *= 0.8;
+    vy *= 0.8;
+  }
+
+  return {
+    ...updatedEnemy,
+    position: {
+      x: enemy.position.x + vx * deltaTime,
+      y: enemy.position.y + vy * deltaTime,
+    },
+    velocity: { x: vx, y: vy },
+  };
 }
 
 function checkEnemyPlayerCollision(
@@ -522,15 +578,20 @@ function checkEnemyPlayerCollision(
   return { hit: false, damage: 0 };
 }
 
-function spawnEnemy(wave: number, width: number, height: number, playerPos: Vector2): Enemy {
+function spawnEnemy(wave: number, width: number, height: number, playerPos: Vector2, isSplit = false): Enemy {
   // Determine enemy type based on wave
   let type: EnemyType = 'chaser';
   const roll = Math.random();
   
-  if (wave >= 3 && roll < 0.2) type = 'shooter';
-  if (wave >= 5 && roll < 0.15) type = 'tank';
-  if (wave >= 2 && roll < 0.3) type = 'swarm';
-  if (wave >= 4 && roll < 0.1) type = 'bomber';
+  // More variety as waves progress
+  if (wave >= 2 && roll < 0.25) type = 'swarm';
+  if (wave >= 2 && roll >= 0.25 && roll < 0.35) type = 'zigzag';
+  if (wave >= 3 && roll >= 0.35 && roll < 0.45) type = 'shooter';
+  if (wave >= 4 && roll >= 0.45 && roll < 0.55) type = 'splitter';
+  if (wave >= 5 && roll >= 0.55 && roll < 0.62) type = 'tank';
+  if (wave >= 5 && roll >= 0.62 && roll < 0.70) type = 'ghost';
+  if (wave >= 6 && roll >= 0.70 && roll < 0.78) type = 'bomber';
+  if (wave >= 7 && roll >= 0.78 && roll < 0.85) type = 'magnet';
 
   const config = ENEMY_CONFIGS[type];
   const waveMultiplier = 1 + wave * 0.1;
@@ -551,15 +612,18 @@ function spawnEnemy(wave: number, width: number, height: number, playerPos: Vect
     id: generateId(),
     position: { x, y },
     velocity: { x: 0, y: 0 },
-    radius: config.radius,
+    radius: isSplit ? config.radius * 0.6 : config.radius,
     color: config.color,
-    health: config.health * waveMultiplier,
-    maxHealth: config.health * waveMultiplier,
+    health: isSplit ? config.health * 0.3 : config.health * waveMultiplier,
+    maxHealth: isSplit ? config.health * 0.3 : config.health * waveMultiplier,
     speed: config.speed * (1 + wave * 0.02),
     damage: config.damage * waveMultiplier,
     type,
-    points: config.points,
+    points: isSplit ? Math.floor(config.points * 0.3) : config.points,
     spawnTime: Date.now(),
+    zigzagPhase: type === 'zigzag' ? Math.random() * Math.PI * 2 : undefined,
+    ghostAlpha: type === 'ghost' ? 1 : undefined,
+    isSplit,
   };
 }
 
@@ -768,7 +832,8 @@ export function applyUpgrade(state: GameState, upgrade: Upgrade): GameState {
         };
         break;
       case 'speed':
-        player = { ...player, speed: player.speed * 1.15 };
+        // Cap speed at 12 to keep it controllable
+        player = { ...player, speed: Math.min(12, player.speed * 1.15) };
         break;
       case 'magnet':
         // Magnet range is in config, we'll track it on player
@@ -847,9 +912,30 @@ function applyPowerup(player: Player, powerup: PowerUp, state: GameState): Playe
 function createExplosion(position: Vector2, color: string, count: number): Particle[] {
   const particles: Particle[] = [];
   
+  // Inner burst - fast small particles
   for (let i = 0; i < count; i++) {
-    const angle = (Math.PI * 2 * i) / count + Math.random() * 0.3;
-    const speed = 2 + Math.random() * 4;
+    const angle = (Math.PI * 2 * i) / count + Math.random() * 0.5;
+    const speed = 4 + Math.random() * 6;
+    
+    particles.push({
+      id: generateId(),
+      position: { x: position.x + (Math.random() - 0.5) * 10, y: position.y + (Math.random() - 0.5) * 10 },
+      velocity: {
+        x: Math.cos(angle) * speed,
+        y: Math.sin(angle) * speed,
+      },
+      color,
+      size: 3 + Math.random() * 3,
+      life: 400 + Math.random() * 200,
+      maxLife: 600,
+      type: 'explosion',
+    });
+  }
+
+  // Outer ring - slower larger particles
+  for (let i = 0; i < Math.floor(count / 2); i++) {
+    const angle = (Math.PI * 2 * i) / (count / 2) + Math.random() * 0.3;
+    const speed = 1 + Math.random() * 2;
     
     particles.push({
       id: generateId(),
@@ -858,11 +944,29 @@ function createExplosion(position: Vector2, color: string, count: number): Parti
         x: Math.cos(angle) * speed,
         y: Math.sin(angle) * speed,
       },
+      color: COLORS.white,
+      size: 2 + Math.random() * 2,
+      life: 300 + Math.random() * 200,
+      maxLife: 500,
+      type: 'spark',
+    });
+  }
+
+  // Geometry Wars style line trails
+  for (let i = 0; i < 6; i++) {
+    const angle = (Math.PI * 2 * i) / 6;
+    particles.push({
+      id: generateId(),
+      position: { ...position },
+      velocity: {
+        x: Math.cos(angle) * 8,
+        y: Math.sin(angle) * 8,
+      },
       color,
-      size: 4 + Math.random() * 4,
-      life: 500 + Math.random() * 300,
-      maxLife: 800,
-      type: 'explosion',
+      size: 12,
+      life: 200,
+      maxLife: 200,
+      type: 'trail',
     });
   }
 
@@ -925,13 +1029,34 @@ export function renderGame(
     ctx.stroke();
   }
 
-  // Draw experience orbs
+  // Draw experience orbs - diamond shape with glow to distinguish from projectiles
   experienceOrbs.forEach(orb => {
-    ctx.fillStyle = COLORS.cyan;
-    ctx.globalAlpha = 0.8;
+    const pulse = 1 + Math.sin(time * 0.008 + orb.position.x * 0.1) * 0.3;
+    const size = 6 * pulse;
+    
+    // Outer glow
+    ctx.shadowColor = COLORS.green;
+    ctx.shadowBlur = 12;
+    
+    // Diamond shape
+    ctx.fillStyle = COLORS.green;
+    ctx.globalAlpha = 0.9;
     ctx.beginPath();
-    ctx.arc(orb.position.x, orb.position.y, 5, 0, Math.PI * 2);
+    ctx.moveTo(orb.position.x, orb.position.y - size);
+    ctx.lineTo(orb.position.x + size * 0.7, orb.position.y);
+    ctx.lineTo(orb.position.x, orb.position.y + size);
+    ctx.lineTo(orb.position.x - size * 0.7, orb.position.y);
+    ctx.closePath();
     ctx.fill();
+    
+    // Inner bright core
+    ctx.fillStyle = COLORS.white;
+    ctx.globalAlpha = 0.7;
+    ctx.beginPath();
+    ctx.arc(orb.position.x, orb.position.y, 2, 0, Math.PI * 2);
+    ctx.fill();
+    
+    ctx.shadowBlur = 0;
     ctx.globalAlpha = 1;
   });
 
@@ -947,22 +1072,58 @@ export function renderGame(
     ctx.fillText(config.icon, powerup.position.x, powerup.position.y);
   });
 
-  // Draw particles
+  // Draw particles with Geometry Wars style effects
   particles.forEach(particle => {
-    ctx.globalAlpha = particle.life / particle.maxLife;
+    const alpha = particle.life / particle.maxLife;
+    ctx.globalAlpha = alpha;
+    
     if (particle.type === 'text') {
       ctx.fillStyle = particle.color;
       ctx.font = `bold ${particle.size}px "JetBrains Mono", monospace`;
       ctx.textAlign = 'center';
       ctx.fillText(particle.text || '', particle.position.x, particle.position.y);
-    } else {
-      ctx.fillStyle = particle.color;
-      ctx.fillRect(
-        particle.position.x - particle.size / 2,
-        particle.position.y - particle.size / 2,
-        particle.size,
-        particle.size
+    } else if (particle.type === 'trail') {
+      // Line trail effect
+      ctx.strokeStyle = particle.color;
+      ctx.lineWidth = particle.size * alpha * 0.5;
+      ctx.lineCap = 'round';
+      ctx.shadowColor = particle.color;
+      ctx.shadowBlur = 8;
+      ctx.beginPath();
+      ctx.moveTo(
+        particle.position.x - particle.velocity.x * 2,
+        particle.position.y - particle.velocity.y * 2
       );
+      ctx.lineTo(particle.position.x, particle.position.y);
+      ctx.stroke();
+      ctx.shadowBlur = 0;
+    } else if (particle.type === 'spark') {
+      // Small bright spark
+      ctx.fillStyle = particle.color;
+      ctx.shadowColor = particle.color;
+      ctx.shadowBlur = 6;
+      ctx.beginPath();
+      ctx.arc(particle.position.x, particle.position.y, particle.size * 0.5, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.shadowBlur = 0;
+    } else if (particle.type === 'ring') {
+      // Expanding ring
+      ctx.strokeStyle = particle.color;
+      ctx.lineWidth = 2 * alpha;
+      ctx.beginPath();
+      ctx.arc(particle.position.x, particle.position.y, particle.size * (1 - alpha) * 3, 0, Math.PI * 2);
+      ctx.stroke();
+    } else {
+      // Default explosion particle - square with glow
+      ctx.fillStyle = particle.color;
+      ctx.shadowColor = particle.color;
+      ctx.shadowBlur = 4;
+      ctx.save();
+      ctx.translate(particle.position.x, particle.position.y);
+      ctx.rotate(Math.atan2(particle.velocity.y, particle.velocity.x));
+      ctx.fillRect(-particle.size / 2, -particle.size / 4, particle.size, particle.size / 2);
+      ctx.restore();
+      ctx.shadowBlur = 0;
     }
     ctx.globalAlpha = 1;
   });
@@ -1047,13 +1208,22 @@ function renderEnemy(ctx: CanvasRenderingContext2D, enemy: Enemy, time: number) 
   ctx.save();
   ctx.translate(position.x, position.y);
 
+  // Ghost enemies fade in and out
+  if (type === 'ghost') {
+    ctx.globalAlpha = enemy.ghostAlpha || 0.5;
+  }
+
+  // Add glow effect
+  ctx.shadowColor = color;
+  ctx.shadowBlur = 8;
+
   // Draw enemy shape based on type
   ctx.fillStyle = color;
   ctx.strokeStyle = color;
   ctx.lineWidth = 2;
 
   if (type === 'boss') {
-    // Boss is larger octagon
+    // Boss is larger octagon with rotation
     const sides = 8;
     ctx.beginPath();
     for (let i = 0; i < sides; i++) {
@@ -1083,8 +1253,73 @@ function renderEnemy(ctx: CanvasRenderingContext2D, enemy: Enemy, time: number) 
     ctx.stroke();
     ctx.fillStyle = `${color}44`;
     ctx.fill();
+  } else if (type === 'zigzag') {
+    // Zigzag is triangle
+    ctx.beginPath();
+    ctx.moveTo(0, -radius);
+    ctx.lineTo(radius, radius);
+    ctx.lineTo(-radius, radius);
+    ctx.closePath();
+    ctx.stroke();
+    ctx.fillStyle = `${color}44`;
+    ctx.fill();
+  } else if (type === 'splitter') {
+    // Splitter is hexagon
+    const sides = 6;
+    ctx.beginPath();
+    for (let i = 0; i < sides; i++) {
+      const angle = (i / sides) * Math.PI * 2;
+      const x = Math.cos(angle) * radius;
+      const y = Math.sin(angle) * radius;
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.closePath();
+    ctx.stroke();
+    ctx.fillStyle = `${color}44`;
+    ctx.fill();
+  } else if (type === 'ghost') {
+    // Ghost is wavy circle
+    ctx.beginPath();
+    for (let i = 0; i <= 32; i++) {
+      const angle = (i / 32) * Math.PI * 2;
+      const wobble = Math.sin(angle * 4 + time * 0.01) * 3;
+      const x = Math.cos(angle) * (radius + wobble);
+      const y = Math.sin(angle) * (radius + wobble);
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.closePath();
+    ctx.stroke();
+    ctx.fillStyle = `${color}22`;
+    ctx.fill();
+  } else if (type === 'magnet') {
+    // Magnet is horseshoe shape (simplified as arc)
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.arc(0, 0, radius, Math.PI * 0.2, Math.PI * 1.8);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(0, 0, radius * 0.6, 0, Math.PI * 2);
+    ctx.fillStyle = `${color}44`;
+    ctx.fill();
+  } else if (type === 'bomber') {
+    // Bomber is star shape
+    ctx.beginPath();
+    for (let i = 0; i < 10; i++) {
+      const angle = (i / 10) * Math.PI * 2 - Math.PI / 2;
+      const r = i % 2 === 0 ? radius : radius * 0.5;
+      const x = Math.cos(angle) * r;
+      const y = Math.sin(angle) * r;
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.closePath();
+    ctx.stroke();
+    ctx.fillStyle = `${color}44`;
+    ctx.fill();
   } else {
-    // Default circle
+    // Default circle (chaser, shooter)
     ctx.beginPath();
     ctx.arc(0, 0, radius, 0, Math.PI * 2);
     ctx.stroke();
@@ -1092,14 +1327,19 @@ function renderEnemy(ctx: CanvasRenderingContext2D, enemy: Enemy, time: number) 
     ctx.fill();
   }
 
-  // Health bar
-  const healthPercent = health / maxHealth;
-  const barWidth = radius * 2;
-  const barHeight = 4;
-  ctx.fillStyle = COLORS.dark;
-  ctx.fillRect(-barWidth / 2, radius + 5, barWidth, barHeight);
-  ctx.fillStyle = healthPercent > 0.5 ? COLORS.green : healthPercent > 0.25 ? COLORS.yellow : COLORS.pink;
-  ctx.fillRect(-barWidth / 2, radius + 5, barWidth * healthPercent, barHeight);
+  ctx.shadowBlur = 0;
+
+  // Health bar (skip for ghosts when faded)
+  if (type !== 'ghost' || (enemy.ghostAlpha || 1) > 0.3) {
+    const healthPercent = health / maxHealth;
+    const barWidth = radius * 2;
+    const barHeight = 4;
+    ctx.globalAlpha = type === 'ghost' ? (enemy.ghostAlpha || 1) : 1;
+    ctx.fillStyle = COLORS.dark;
+    ctx.fillRect(-barWidth / 2, radius + 5, barWidth, barHeight);
+    ctx.fillStyle = healthPercent > 0.5 ? COLORS.green : healthPercent > 0.25 ? COLORS.yellow : COLORS.pink;
+    ctx.fillRect(-barWidth / 2, radius + 5, barWidth * healthPercent, barHeight);
+  }
 
   ctx.restore();
 }
