@@ -8,7 +8,10 @@ import {
   startGame,
   updateGameState,
   renderGame,
+  generateUpgrades,
+  applyUpgrade,
 } from '@/lib/gameEngine';
+import { Upgrade } from '@/types/game';
 
 interface GameProps {
   playerImageUrl: string;
@@ -37,7 +40,10 @@ export default function Game({ playerImageUrl, playerName, onGameOver, onBack }:
     wave: number;
     health: number;
     maxHealth: number;
+    level: number;
   } | null>(null);
+  const [showUpgrades, setShowUpgrades] = useState(false);
+  const [availableUpgrades, setAvailableUpgrades] = useState<Upgrade[]>([]);
 
   // Handle resize
   useEffect(() => {
@@ -74,6 +80,21 @@ export default function Game({ playerImageUrl, playerName, onGameOver, onBack }:
     }
   }, [initGame]);
 
+  // Handle upgrade selection
+  const handleUpgrade = useCallback((upgrade: Upgrade) => {
+    if (gameStateRef.current) {
+      gameStateRef.current = applyUpgrade(gameStateRef.current, upgrade);
+      
+      // Check if more level ups pending
+      if (gameStateRef.current.pendingLevelUps > 0) {
+        setAvailableUpgrades(gameStateRef.current.availableUpgrades);
+      } else {
+        setShowUpgrades(false);
+        setAvailableUpgrades([]);
+      }
+    }
+  }, []);
+
   // Handle input
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -93,9 +114,12 @@ export default function Game({ playerImageUrl, playerName, onGameOver, onBack }:
       const canvas = canvasRef.current;
       if (canvas) {
         const rect = canvas.getBoundingClientRect();
+        // Scale mouse position to account for CSS scaling of canvas
+        const scaleX = canvas.width / rect.width;
+        const scaleY = canvas.height / rect.height;
         inputRef.current.mousePos = {
-          x: e.clientX - rect.left,
-          y: e.clientY - rect.top,
+          x: (e.clientX - rect.left) * scaleX,
+          y: (e.clientY - rect.top) * scaleY,
         };
       }
     };
@@ -140,7 +164,7 @@ export default function Game({ playerImageUrl, playerName, onGameOver, onBack }:
       const deltaTime = Math.min((timestamp - lastTimeRef.current) / 16.67, 3);
       lastTimeRef.current = timestamp;
 
-      if (!isPaused && gameStateRef.current.isRunning) {
+      if (!isPaused && !showUpgrades && gameStateRef.current.isRunning) {
         gameStateRef.current = updateGameState(
           gameStateRef.current,
           deltaTime,
@@ -157,7 +181,14 @@ export default function Game({ playerImageUrl, playerName, onGameOver, onBack }:
             wave: gameStateRef.current.wave,
             health: gameStateRef.current.player.health,
             maxHealth: gameStateRef.current.player.maxHealth,
+            level: gameStateRef.current.player.level,
           });
+        }
+
+        // Check for pending level ups
+        if (gameStateRef.current.pendingLevelUps > 0 && !showUpgrades) {
+          setShowUpgrades(true);
+          setAvailableUpgrades(gameStateRef.current.availableUpgrades);
         }
       }
 
@@ -182,7 +213,7 @@ export default function Game({ playerImageUrl, playerName, onGameOver, onBack }:
     return () => {
       cancelAnimationFrame(animationFrameRef.current);
     };
-  }, [isLoading, isPaused, dimensions, onGameOver]);
+  }, [isLoading, isPaused, showUpgrades, dimensions, onGameOver]);
 
   return (
     <div 
@@ -232,7 +263,7 @@ export default function Game({ playerImageUrl, playerName, onGameOver, onBack }:
           </div>
         )}
 
-        {isPaused && !isLoading && (
+        {isPaused && !isLoading && !showUpgrades && (
           <div className="absolute inset-0 flex items-center justify-center bg-brutal-black/90 z-20">
             <div className="text-center">
               <div className="font-display text-6xl text-electric-yellow mb-4">||</div>
@@ -252,6 +283,47 @@ export default function Game({ playerImageUrl, playerName, onGameOver, onBack }:
                 >
                   Quit Game
                 </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {showUpgrades && (
+          <div className="absolute inset-0 flex items-center justify-center bg-brutal-black/95 z-30">
+            <div className="text-center max-w-2xl w-full px-4">
+              <div className="font-display text-4xl text-electric-cyan mb-2 glitch-text" data-text="LEVEL UP!">
+                LEVEL UP!
+              </div>
+              <p className="font-mono text-sm text-white/60 mb-8">
+                Level {displayState?.level || 1} — Choose an upgrade
+              </p>
+              
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                {availableUpgrades.map((upgrade) => (
+                  <button
+                    key={upgrade.id}
+                    onClick={() => handleUpgrade(upgrade)}
+                    className="group relative bg-brutal-dark border-2 border-white/20 hover:border-electric-cyan p-6 transition-all duration-200 hover:scale-105"
+                    style={{ borderColor: `${upgrade.color}40` }}
+                  >
+                    <div 
+                      className="absolute inset-0 opacity-0 group-hover:opacity-20 transition-opacity"
+                      style={{ backgroundColor: upgrade.color }}
+                    />
+                    <div className="relative z-10">
+                      <div className="text-4xl mb-3">{upgrade.icon}</div>
+                      <div 
+                        className="font-display text-xl mb-2"
+                        style={{ color: upgrade.color }}
+                      >
+                        {upgrade.name}
+                      </div>
+                      <p className="font-mono text-xs text-white/60">
+                        {upgrade.description}
+                      </p>
+                    </div>
+                  </button>
+                ))}
               </div>
             </div>
           </div>

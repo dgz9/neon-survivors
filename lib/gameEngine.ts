@@ -8,6 +8,7 @@ import {
   ExperienceOrb,
   Particle,
   Vector2,
+  Upgrade,
   DEFAULT_CONFIG,
   ENEMY_CONFIGS,
   WEAPON_CONFIGS,
@@ -80,6 +81,8 @@ export function createInitialGameState(
     enemiesKilledThisWave: 0,
     enemiesRequiredForWave: 10,
     screenShake: 0,
+    pendingLevelUps: 0,
+    availableUpgrades: [],
   };
 }
 
@@ -138,7 +141,7 @@ export function updateGameState(
 
   // Update projectiles
   projectiles = projectiles
-    .map(p => updateProjectile(p, deltaTime, enemies))
+    .map(p => updateProjectile(p, deltaTime, player.position))
     .filter(p => isProjectileAlive(p, width, height));
 
   // Check projectile-enemy collisions
@@ -207,7 +210,19 @@ export function updateGameState(
   // Collect experience orbs
   const { collectedXP, remainingOrbs } = collectExperienceOrbs(player, experienceOrbs, config);
   experienceOrbs = remainingOrbs;
-  player = addExperience(player, collectedXP, config);
+  
+  if (collectedXP > 0) {
+    const xpResult = addExperience(player, collectedXP, config);
+    player = xpResult.player;
+    if (xpResult.leveledUp) {
+      // Queue level up selection
+      state = {
+        ...state,
+        pendingLevelUps: state.pendingLevelUps + 1,
+        availableUpgrades: state.availableUpgrades.length === 0 ? generateUpgrades(player) : state.availableUpgrades,
+      };
+    }
+  }
 
   // Collect powerups
   const { collectedPowerups, remainingPowerups, powerupParticles } = 
@@ -307,18 +322,43 @@ function fireWeapons(player: Player, mousePos: Vector2, currentTime: number): Pr
     if (currentTime - weapon.lastFired < weapon.fireRate) return;
     weapon.lastFired = currentTime;
 
+    const config = WEAPON_CONFIGS[weapon.type];
+
+    // Orbit weapon creates orbs that circle around player
+    if (weapon.type === 'orbit') {
+      for (let i = 0; i < weapon.projectileCount + weapon.level - 1; i++) {
+        const orbitAngle = (i / (weapon.projectileCount + weapon.level - 1)) * Math.PI * 2;
+        projectiles.push({
+          id: generateId(),
+          position: { ...player.position },
+          velocity: { x: 0, y: 0 },
+          radius: 10 + weapon.level * 2,
+          color: config.color,
+          damage: weapon.damage * (1 + (weapon.level - 1) * 0.3),
+          isEnemy: false,
+          piercing: 999,
+          hitEnemies: new Set(),
+          orbit: {
+            angle: orbitAngle,
+            radius: 60 + weapon.level * 10,
+            speed: 0.05 + weapon.level * 0.01,
+            owner: player.position,
+          },
+        } as Projectile);
+      }
+      return;
+    }
+
     const angle = Math.atan2(
       mousePos.y - player.position.y,
       mousePos.x - player.position.x
     );
-
-    const config = WEAPON_CONFIGS[weapon.type];
     
     for (let i = 0; i < weapon.projectileCount; i++) {
       let projectileAngle = angle;
       
       if (weapon.projectileCount > 1) {
-        const spread = Math.PI / 6;
+        const spread = weapon.type === 'spread' ? Math.PI / 3 : Math.PI / 6;
         projectileAngle = angle - spread / 2 + (spread * i / (weapon.projectileCount - 1));
       }
 
@@ -329,7 +369,7 @@ function fireWeapons(player: Player, mousePos: Vector2, currentTime: number): Pr
           x: Math.cos(projectileAngle) * weapon.projectileSpeed,
           y: Math.sin(projectileAngle) * weapon.projectileSpeed,
         },
-        radius: 6,
+        radius: weapon.type === 'missile' ? 10 : 6,
         color: config.color,
         damage: weapon.damage * (1 + (weapon.level - 1) * 0.2),
         isEnemy: false,
@@ -342,7 +382,25 @@ function fireWeapons(player: Player, mousePos: Vector2, currentTime: number): Pr
   return projectiles;
 }
 
-function updateProjectile(projectile: Projectile, deltaTime: number, enemies: Enemy[]): Projectile {
+function updateProjectile(projectile: Projectile, deltaTime: number, playerPos: Vector2): Projectile {
+  // Handle orbiting projectiles
+  if (projectile.orbit) {
+    const newAngle = projectile.orbit.angle + projectile.orbit.speed * deltaTime;
+    return {
+      ...projectile,
+      position: {
+        x: playerPos.x + Math.cos(newAngle) * projectile.orbit.radius,
+        y: playerPos.y + Math.sin(newAngle) * projectile.orbit.radius,
+      },
+      orbit: {
+        ...projectile.orbit,
+        angle: newAngle,
+        owner: playerPos,
+      },
+      lifetime: (projectile.lifetime || 3000) - deltaTime * 16,
+    };
+  }
+
   return {
     ...projectile,
     position: {
@@ -353,6 +411,11 @@ function updateProjectile(projectile: Projectile, deltaTime: number, enemies: En
 }
 
 function isProjectileAlive(projectile: Projectile, width: number, height: number): boolean {
+  // Orbiting projectiles expire based on lifetime
+  if (projectile.orbit) {
+    return (projectile.lifetime || 0) > 0;
+  }
+  
   const { x, y } = projectile.position;
   const margin = 50;
   return x > -margin && x < width + margin && y > -margin && y < height + margin;
@@ -525,6 +588,8 @@ function collectExperienceOrbs(
   config: GameConfig
 ): { collectedXP: number; remainingOrbs: ExperienceOrb[] } {
   let collectedXP = 0;
+  const magnetRange = config.magnetRange * (player.magnetMultiplier || 1);
+  
   const remainingOrbs = orbs.filter(orb => {
     const dx = player.position.x - orb.position.x;
     const dy = player.position.y - orb.position.y;
@@ -536,8 +601,8 @@ function collectExperienceOrbs(
     }
 
     // Move orbs towards player if within magnet range
-    if (distance < config.magnetRange) {
-      const speed = 5 * (1 - distance / config.magnetRange);
+    if (distance < magnetRange) {
+      const speed = 5 * (1 - distance / magnetRange);
       orb.position.x += (dx / distance) * speed;
       orb.position.y += (dy / distance) * speed;
     }
@@ -548,17 +613,176 @@ function collectExperienceOrbs(
   return { collectedXP, remainingOrbs };
 }
 
-function addExperience(player: Player, xp: number, config: GameConfig): Player {
+function addExperience(player: Player, xp: number, config: GameConfig): { player: Player; leveledUp: boolean } {
   let experience = player.experience + xp;
   let level = player.level;
-  const xpNeeded = config.experienceToLevel * level;
+  let leveledUp = false;
+  let xpNeeded = config.experienceToLevel * level;
 
   while (experience >= xpNeeded) {
     experience -= xpNeeded;
     level++;
+    leveledUp = true;
+    xpNeeded = config.experienceToLevel * level;
   }
 
-  return { ...player, experience, level };
+  return { player: { ...player, experience, level }, leveledUp };
+}
+
+export function generateUpgrades(player: Player): Upgrade[] {
+  const upgrades: Upgrade[] = [];
+  const ownedWeaponTypes = new Set(player.weapons.map(w => w.type));
+  
+  // Weapon upgrades for owned weapons
+  player.weapons.forEach(weapon => {
+    if (weapon.level < 5) {
+      const config = WEAPON_CONFIGS[weapon.type];
+      upgrades.push({
+        id: `upgrade_${weapon.type}`,
+        type: 'weapon_upgrade',
+        weaponType: weapon.type,
+        name: `${weapon.type.charAt(0).toUpperCase() + weapon.type.slice(1)} +`,
+        description: `Level ${weapon.level} → ${weapon.level + 1}: +20% damage, faster fire`,
+        icon: getWeaponIcon(weapon.type),
+        color: config.color,
+      });
+    }
+  });
+
+  // New weapons not yet owned
+  const allWeapons: WeaponType[] = ['blaster', 'spread', 'laser', 'orbit', 'missile'];
+  allWeapons.forEach(weaponType => {
+    if (!ownedWeaponTypes.has(weaponType)) {
+      const config = WEAPON_CONFIGS[weaponType];
+      upgrades.push({
+        id: `new_${weaponType}`,
+        type: 'weapon_new',
+        weaponType,
+        name: weaponType.charAt(0).toUpperCase() + weaponType.slice(1),
+        description: getWeaponDescription(weaponType),
+        icon: getWeaponIcon(weaponType),
+        color: config.color,
+      });
+    }
+  });
+
+  // Stat upgrades
+  upgrades.push({
+    id: 'stat_health',
+    type: 'stat',
+    stat: 'health',
+    name: 'Vitality',
+    description: '+25 Max HP, heal 25 HP',
+    icon: '❤️',
+    color: '#39ff14',
+  });
+
+  upgrades.push({
+    id: 'stat_speed',
+    type: 'stat',
+    stat: 'speed',
+    name: 'Swift',
+    description: '+15% movement speed',
+    icon: '⚡',
+    color: '#e4ff1a',
+  });
+
+  upgrades.push({
+    id: 'stat_magnet',
+    type: 'stat',
+    stat: 'magnet',
+    name: 'Magnet',
+    description: '+30% pickup range',
+    icon: '🧲',
+    color: '#bf5fff',
+  });
+
+  // Shuffle and return 3 random upgrades
+  const shuffled = upgrades.sort(() => Math.random() - 0.5);
+  return shuffled.slice(0, 3);
+}
+
+function getWeaponIcon(type: WeaponType): string {
+  switch (type) {
+    case 'blaster': return '🔫';
+    case 'spread': return '💨';
+    case 'laser': return '⚡';
+    case 'orbit': return '🔮';
+    case 'missile': return '🚀';
+    default: return '🔫';
+  }
+}
+
+function getWeaponDescription(type: WeaponType): string {
+  switch (type) {
+    case 'blaster': return 'Basic rapid-fire weapon';
+    case 'spread': return '5-shot spread, covers wide area';
+    case 'laser': return 'Fast piercing beam, hits multiple enemies';
+    case 'orbit': return 'Orbs circle around you, constant damage';
+    case 'missile': return 'Slow but devastating explosive shots';
+    default: return '';
+  }
+}
+
+export function applyUpgrade(state: GameState, upgrade: Upgrade): GameState {
+  let { player } = state;
+
+  if (upgrade.type === 'weapon_new' && upgrade.weaponType) {
+    const config = WEAPON_CONFIGS[upgrade.weaponType];
+    player = {
+      ...player,
+      weapons: [
+        ...player.weapons,
+        {
+          type: upgrade.weaponType,
+          level: 1,
+          lastFired: 0,
+          ...config,
+        },
+      ],
+    };
+  } else if (upgrade.type === 'weapon_upgrade' && upgrade.weaponType) {
+    player = {
+      ...player,
+      weapons: player.weapons.map(w => {
+        if (w.type === upgrade.weaponType) {
+          return {
+            ...w,
+            level: w.level + 1,
+            damage: w.damage * 1.2,
+            fireRate: Math.max(50, w.fireRate * 0.9),
+            projectileCount: w.type === 'spread' ? w.projectileCount + 1 : w.projectileCount,
+            piercing: w.type === 'laser' ? w.piercing + 1 : w.piercing,
+          };
+        }
+        return w;
+      }),
+    };
+  } else if (upgrade.type === 'stat') {
+    switch (upgrade.stat) {
+      case 'health':
+        player = {
+          ...player,
+          maxHealth: player.maxHealth + 25,
+          health: Math.min(player.health + 25, player.maxHealth + 25),
+        };
+        break;
+      case 'speed':
+        player = { ...player, speed: player.speed * 1.15 };
+        break;
+      case 'magnet':
+        // Magnet range is in config, we'll track it on player
+        player = { ...player, magnetMultiplier: (player.magnetMultiplier || 1) * 1.3 };
+        break;
+    }
+  }
+
+  return {
+    ...state,
+    player,
+    pendingLevelUps: state.pendingLevelUps - 1,
+    availableUpgrades: state.pendingLevelUps > 1 ? generateUpgrades(player) : [],
+  };
 }
 
 function createPowerup(position: Vector2): PowerUp {

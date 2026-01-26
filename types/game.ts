@@ -20,6 +20,7 @@ export interface Player {
   experience: number;
   level: number;
   kills: number;
+  magnetMultiplier?: number;
 }
 
 export interface Enemy {
@@ -49,6 +50,13 @@ export interface Projectile {
   isEnemy: boolean;
   piercing: number;
   hitEnemies: Set<string>;
+  orbit?: {
+    angle: number;
+    radius: number;
+    speed: number;
+    owner: Vector2;
+  };
+  lifetime?: number;
 }
 
 export interface Weapon {
@@ -93,6 +101,17 @@ export interface Particle {
   text?: string;
 }
 
+export interface Upgrade {
+  id: string;
+  type: 'weapon_new' | 'weapon_upgrade' | 'stat';
+  weaponType?: WeaponType;
+  stat?: 'health' | 'speed' | 'magnet' | 'armor';
+  name: string;
+  description: string;
+  icon: string;
+  color: string;
+}
+
 export interface GameState {
   player: Player;
   enemies: Enemy[];
@@ -112,6 +131,8 @@ export interface GameState {
   enemiesKilledThisWave: number;
   enemiesRequiredForWave: number;
   screenShake: number;
+  pendingLevelUps: number;
+  availableUpgrades: Upgrade[];
 }
 
 export interface GameConfig {
