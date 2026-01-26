@@ -138,7 +138,26 @@ export function updateGameState(
   let { player, enemies, projectiles, powerups, experienceOrbs, particles, score, multiplier, multiplierTimer, screenShake } = state;
 
   // Update player position based on input
+  const oldPos = { ...player.position };
   player = updatePlayer(player, input, width, height, config, deltaTime);
+  
+  // Player movement trail particles
+  const moveSpeed = Math.sqrt(player.velocity.x ** 2 + player.velocity.y ** 2);
+  if (moveSpeed > 2) {
+    particles.push({
+      id: generateId(),
+      position: { ...oldPos },
+      velocity: { 
+        x: -player.velocity.x * 0.1 + (Math.random() - 0.5) * 0.5,
+        y: -player.velocity.y * 0.1 + (Math.random() - 0.5) * 0.5,
+      },
+      color: COLORS.cyan,
+      size: 3 + Math.random() * 2,
+      life: 150 + Math.random() * 100,
+      maxLife: 250,
+      type: 'spark',
+    });
+  }
 
   // Fire weapons
   const newProjectiles = fireWeapons(player, input.mousePos, currentTime);
@@ -203,8 +222,43 @@ export function updateGameState(
       }
     }
 
-    // Death particles - more dramatic
-    particles = [...particles, ...createExplosion(enemy.position, enemy.color, 20 + enemy.radius)];
+    // Death particles - much more dramatic
+    particles = [...particles, ...createExplosion(enemy.position, enemy.color, 25 + enemy.radius)];
+    
+    // Add extra death effects for bigger enemies
+    if (enemy.radius > 20 || enemy.type === 'boss') {
+      // Multiple expanding rings
+      for (let i = 0; i < 3; i++) {
+        particles.push({
+          id: generateId(),
+          position: { ...enemy.position },
+          velocity: { x: 0, y: 0 },
+          color: enemy.color,
+          size: 30 + i * 20,
+          life: 250 + i * 50,
+          maxLife: 300 + i * 50,
+          type: 'ring',
+        });
+      }
+      
+      // Radial line burst
+      for (let i = 0; i < 16; i++) {
+        const angle = (i / 16) * Math.PI * 2;
+        particles.push({
+          id: generateId(),
+          position: { ...enemy.position },
+          velocity: {
+            x: Math.cos(angle) * 12,
+            y: Math.sin(angle) * 12,
+          },
+          color: enemy.color,
+          size: 15,
+          life: 180,
+          maxLife: 180,
+          type: 'trail',
+        });
+      }
+    }
   });
 
   state = { ...state, enemiesKilledThisWave: state.enemiesKilledThisWave + killedEnemies.length };
@@ -225,10 +279,11 @@ export function updateGameState(
       health: player.health - collision.damage,
       invulnerableUntil: currentTime + 1000,
     };
-    screenShake = 15;
+    screenShake = 20;
+    state = { ...state, screenFlash: currentTime };
     
     // Crash/damage particles - big impact effect
-    particles = [...particles, ...createExplosion(player.position, COLORS.pink, 25)];
+    particles = [...particles, ...createExplosion(player.position, COLORS.pink, 35)];
     
     // Add radial crash lines
     for (let i = 0; i < 12; i++) {
@@ -334,14 +389,36 @@ export function updateGameState(
 
   // Check wave completion
   if (state.enemiesKilledThisWave >= state.enemiesRequiredForWave) {
+    const newWave = state.wave + 1;
     state = {
       ...state,
-      wave: state.wave + 1,
+      wave: newWave,
       enemiesKilledThisWave: 0,
       enemiesRequiredForWave: Math.floor(state.enemiesRequiredForWave * 1.2),
+      waveAnnounceTime: currentTime,
     };
+    
+    // Wave celebration particles
+    for (let i = 0; i < 30; i++) {
+      const angle = Math.random() * Math.PI * 2;
+      const speed = 3 + Math.random() * 5;
+      particles.push({
+        id: generateId(),
+        position: { x: width / 2, y: height / 2 },
+        velocity: {
+          x: Math.cos(angle) * speed,
+          y: Math.sin(angle) * speed,
+        },
+        color: [COLORS.cyan, COLORS.yellow, COLORS.pink][Math.floor(Math.random() * 3)],
+        size: 4 + Math.random() * 3,
+        life: 400 + Math.random() * 200,
+        maxLife: 600,
+        type: 'spark',
+      });
+    }
+    
     // Spawn boss every 5 waves
-    if (state.wave % 5 === 0) {
+    if (newWave % 5 === 0) {
       enemies.push(spawnBoss(width, height, player.position));
     }
   }
@@ -562,10 +639,32 @@ function checkProjectileCollisions(
           text: Math.floor(projectile.damage).toString(),
         });
 
-        // Create hit spark particles
-        for (let i = 0; i < 5; i++) {
+        // Create hit spark particles - more of them!
+        for (let i = 0; i < 10; i++) {
           const sparkAngle = Math.random() * Math.PI * 2;
-          const sparkSpeed = 2 + Math.random() * 3;
+          const sparkSpeed = 3 + Math.random() * 5;
+          damageParticles.push({
+            id: generateId(),
+            position: { 
+              x: projectile.position.x + (Math.random() - 0.5) * 10,
+              y: projectile.position.y + (Math.random() - 0.5) * 10,
+            },
+            velocity: {
+              x: Math.cos(sparkAngle) * sparkSpeed,
+              y: Math.sin(sparkAngle) * sparkSpeed,
+            },
+            color: projectile.color,
+            size: 2 + Math.random() * 3,
+            life: 200 + Math.random() * 150,
+            maxLife: 350,
+            type: 'spark',
+          });
+        }
+        
+        // Add enemy color sparks too
+        for (let i = 0; i < 6; i++) {
+          const sparkAngle = Math.random() * Math.PI * 2;
+          const sparkSpeed = 2 + Math.random() * 4;
           damageParticles.push({
             id: generateId(),
             position: { ...projectile.position },
@@ -573,11 +672,11 @@ function checkProjectileCollisions(
               x: Math.cos(sparkAngle) * sparkSpeed,
               y: Math.sin(sparkAngle) * sparkSpeed,
             },
-            color: projectile.color,
+            color: enemy.color,
             size: 3 + Math.random() * 2,
-            life: 150 + Math.random() * 100,
-            maxLife: 250,
-            type: 'spark',
+            life: 180 + Math.random() * 120,
+            maxLife: 300,
+            type: 'explosion',
           });
         }
 
@@ -587,9 +686,21 @@ function checkProjectileCollisions(
           position: { ...projectile.position },
           velocity: { x: 0, y: 0 },
           color: projectile.color,
-          size: 15,
-          life: 150,
-          maxLife: 150,
+          size: 20,
+          life: 180,
+          maxLife: 180,
+          type: 'ring',
+        });
+        
+        // Secondary smaller ring
+        damageParticles.push({
+          id: generateId(),
+          position: { ...projectile.position },
+          velocity: { x: 0, y: 0 },
+          color: enemy.color,
+          size: 12,
+          life: 120,
+          maxLife: 120,
           type: 'ring',
         });
 
@@ -1392,8 +1503,15 @@ export function renderGame(
 
   ctx.restore();
 
+  // Screen flash effect on damage
+  if (state.screenFlash && Date.now() - state.screenFlash < 150) {
+    const flashAlpha = 1 - (Date.now() - state.screenFlash) / 150;
+    ctx.fillStyle = `rgba(255, 45, 106, ${flashAlpha * 0.3})`;
+    ctx.fillRect(0, 0, width, height);
+  }
+
   // Draw UI (not affected by screen shake)
-  renderUI(ctx, state, width, height);
+  renderUI(ctx, state, width, height, time);
 }
 
 function renderPlayer(ctx: CanvasRenderingContext2D, player: Player, time: number) {
@@ -1587,8 +1705,8 @@ function renderEnemy(ctx: CanvasRenderingContext2D, enemy: Enemy, time: number) 
   ctx.restore();
 }
 
-function renderUI(ctx: CanvasRenderingContext2D, state: GameState, width: number, height: number) {
-  const { player, score, multiplier, wave } = state;
+function renderUI(ctx: CanvasRenderingContext2D, state: GameState, width: number, height: number, time: number) {
+  const { player, score, multiplier, wave, waveAnnounceTime } = state;
 
   ctx.fillStyle = COLORS.white;
   ctx.font = 'bold 16px "JetBrains Mono", monospace';
@@ -1642,4 +1760,35 @@ function renderUI(ctx: CanvasRenderingContext2D, state: GameState, width: number
   ctx.fillRect(xpX, xpY, xpBarWidth, xpBarHeight);
   ctx.fillStyle = COLORS.cyan;
   ctx.fillRect(xpX, xpY, xpBarWidth * xpPercent, xpBarHeight);
+
+  // Wave announcement
+  if (waveAnnounceTime) {
+    const elapsed = Date.now() - waveAnnounceTime;
+    if (elapsed < 2000) {
+      const fadeIn = Math.min(1, elapsed / 200);
+      const fadeOut = elapsed > 1500 ? 1 - (elapsed - 1500) / 500 : 1;
+      const alpha = fadeIn * fadeOut;
+      const scale = 1 + Math.sin(elapsed * 0.01) * 0.05;
+      
+      ctx.save();
+      ctx.globalAlpha = alpha;
+      ctx.translate(width / 2, height / 3);
+      ctx.scale(scale, scale);
+      
+      ctx.fillStyle = COLORS.yellow;
+      ctx.font = 'bold 48px "JetBrains Mono", monospace';
+      ctx.textAlign = 'center';
+      ctx.shadowColor = COLORS.yellow;
+      ctx.shadowBlur = 20;
+      ctx.fillText(`WAVE ${wave}`, 0, 0);
+      
+      if (wave % 5 === 0) {
+        ctx.fillStyle = COLORS.pink;
+        ctx.font = 'bold 24px "JetBrains Mono", monospace';
+        ctx.fillText('⚠ BOSS INCOMING ⚠', 0, 40);
+      }
+      
+      ctx.restore();
+    }
+  }
 }

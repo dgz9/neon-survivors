@@ -417,7 +417,7 @@ export default function Game({ playerImageUrl, playerName, onGameOver, onBack }:
 
         {/* Stats display - permanent bonuses and active buffs */}
         {displayState && !isLoading && (
-          <div className="absolute top-2 left-2 flex flex-col gap-1 text-xs font-mono z-10">
+          <div className="absolute top-14 left-2 flex flex-col gap-1 text-xs font-mono z-10">
             {/* Permanent stat bonuses */}
             {displayState.speedBonus > 0 && (
               <div className="flex items-center gap-2 bg-brutal-dark/80 px-2 py-1 border border-yellow-400/30">

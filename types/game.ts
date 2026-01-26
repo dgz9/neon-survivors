@@ -150,6 +150,8 @@ export interface GameState {
   screenShake: number;
   pendingLevelUps: number;
   availableUpgrades: Upgrade[];
+  waveAnnounceTime?: number;
+  screenFlash?: number;
 }
 
 export interface GameConfig {
