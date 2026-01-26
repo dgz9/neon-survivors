@@ -12,6 +12,8 @@ import {
   applyUpgrade,
 } from '@/lib/gameEngine';
 import { Upgrade } from '@/types/game';
+import { playShoot, playHit, playExplosion, playPickup, playLevelUp, playDamage, playWaveComplete, setMuted, isMuted } from '@/lib/audio';
+import { checkAchievements, Achievement, AchievementStats } from '@/lib/achievements';
 
 interface GameOverStats {
   totalDamageDealt: number;
@@ -19,6 +21,7 @@ interface GameOverStats {
   survivalTime: number;
   peakMultiplier: number;
   weaponLevels: { type: string; level: number }[];
+  newAchievements?: { id: string; name: string; icon: string }[];
 }
 
 interface GameProps {
@@ -57,8 +60,14 @@ export default function Game({ playerImageUrl, playerName, arena = 'grid', onGam
   const [showUpgrades, setShowUpgrades] = useState(false);
   const [availableUpgrades, setAvailableUpgrades] = useState<Upgrade[]>([]);
   const [showPowerupLegend, setShowPowerupLegend] = useState(false);
+  const [soundEnabled, setSoundEnabled] = useState(true);
+  const [achievementPopup, setAchievementPopup] = useState<Achievement | null>(null);
   const gamepadIndexRef = useRef<number | null>(null);
   const lastPausePress = useRef<number>(0);
+  const lastWaveRef = useRef<number>(1);
+  const lastHealthRef = useRef<number>(100);
+  const lastKillsRef = useRef<number>(0);
+  const shootSoundThrottle = useRef<number>(0);
 
   // Handle resize
   useEffect(() => {
@@ -278,12 +287,60 @@ export default function Game({ playerImageUrl, playerName, arena = 'grid', onGam
         if (gameStateRef.current.pendingLevelUps > 0 && !showUpgrades) {
           setShowUpgrades(true);
           setAvailableUpgrades(gameStateRef.current.availableUpgrades);
+          playLevelUp();
+        }
+        
+        // Sound effects
+        const gs = gameStateRef.current;
+        
+        // Wave complete sound
+        if (gs.wave > lastWaveRef.current) {
+          lastWaveRef.current = gs.wave;
+          playWaveComplete();
+        }
+        
+        // Damage taken sound
+        if (gs.player.health < lastHealthRef.current) {
+          playDamage();
+        }
+        lastHealthRef.current = gs.player.health;
+        
+        // Kill sound (throttled)
+        if (gs.player.kills > lastKillsRef.current) {
+          const killDiff = gs.player.kills - lastKillsRef.current;
+          if (killDiff > 0) {
+            playHit();
+            if (killDiff > 2) playExplosion();
+          }
+        }
+        lastKillsRef.current = gs.player.kills;
+        
+        // Shoot sound (heavily throttled)
+        if (gs.projectiles.length > 0 && timestamp - shootSoundThrottle.current > 150) {
+          shootSoundThrottle.current = timestamp;
+          playShoot();
         }
       }
 
       // Check game over
       if (gameStateRef.current.isGameOver) {
         const gs = gameStateRef.current;
+        
+        // Check achievements
+        const achStats: AchievementStats = {
+          score: gs.score,
+          wave: gs.wave,
+          kills: gs.player.kills,
+          totalDamageDealt: gs.totalDamageDealt,
+          totalDamageTaken: gs.totalDamageTaken,
+          survivalTimeMs: Date.now() - gs.startTime,
+          peakMultiplier: gs.peakMultiplier,
+          weaponsUnlocked: gs.player.weapons.length,
+          maxWeaponLevel: Math.max(...gs.player.weapons.map(w => w.level)),
+          noDamageTaken: gs.totalDamageTaken === 0,
+        };
+        const newAchievements = checkAchievements(achStats);
+        
         onGameOver(
           gs.score,
           gs.wave,
@@ -294,6 +351,7 @@ export default function Game({ playerImageUrl, playerName, arena = 'grid', onGam
             survivalTime: Date.now() - gs.startTime,
             peakMultiplier: gs.peakMultiplier,
             weaponLevels: gs.player.weapons.map(w => ({ type: w.type, level: w.level })),
+            newAchievements,
           }
         );
         return;
@@ -336,13 +394,26 @@ export default function Game({ playerImageUrl, playerName, arena = 'grid', onGam
           )}
         </div>
 
-        <button
-          onClick={() => setIsPaused(p => !p)}
-          disabled={isLoading}
-          className="font-mono text-xs uppercase tracking-wider text-white/40 hover:text-electric-cyan transition-colors disabled:opacity-30"
-        >
-          {isPaused ? '▶ RESUME' : '|| PAUSE'}
-        </button>
+        <div className="flex items-center gap-4">
+          <button
+            onClick={() => {
+              setSoundEnabled(s => {
+                setMuted(!s);
+                return !s;
+              });
+            }}
+            className="font-mono text-xs uppercase tracking-wider text-white/40 hover:text-electric-cyan transition-colors"
+          >
+            {soundEnabled ? '🔊' : '🔇'}
+          </button>
+          <button
+            onClick={() => setIsPaused(p => !p)}
+            disabled={isLoading}
+            className="font-mono text-xs uppercase tracking-wider text-white/40 hover:text-electric-cyan transition-colors disabled:opacity-30"
+          >
+            {isPaused ? '▶ RESUME' : '|| PAUSE'}
+          </button>
+        </div>
       </div>
 
       {/* Game canvas */}

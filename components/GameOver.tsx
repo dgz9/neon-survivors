@@ -23,6 +23,7 @@ interface GameOverProps {
     survivalTime: number;
     peakMultiplier: number;
     weaponLevels: { type: string; level: number }[];
+    newAchievements?: { id: string; name: string; icon: string }[];
   };
 }
 
@@ -159,6 +160,21 @@ export default function GameOver({
                   {stats.weaponLevels.map((w) => (
                     <div key={w.type} className="px-2 py-1 bg-white/5 border border-white/10 text-xs font-mono">
                       {w.type.toUpperCase()} <span className="text-electric-cyan">Lv{w.level}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+            
+            {/* New Achievements */}
+            {stats.newAchievements && stats.newAchievements.length > 0 && (
+              <div className="mt-4 pt-3 border-t border-electric-yellow/30">
+                <div className="font-mono text-xs text-electric-yellow uppercase tracking-wider mb-2">🏆 Achievements Unlocked!</div>
+                <div className="flex flex-wrap gap-2">
+                  {stats.newAchievements.map((a) => (
+                    <div key={a.id} className="px-3 py-2 bg-electric-yellow/10 border border-electric-yellow/30 text-sm font-mono flex items-center gap-2">
+                      <span>{a.icon}</span>
+                      <span className="text-electric-yellow">{a.name}</span>
                     </div>
                   ))}
                 </div>
