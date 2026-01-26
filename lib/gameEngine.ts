@@ -838,7 +838,7 @@ function applyPowerup(player: Player, powerup: PowerUp, state: GameState): Playe
         weapons: player.weapons.map(w => ({ ...w, damage: w.damage * 1.5 })),
       };
     case 'xp':
-      return addExperience(player, 50, DEFAULT_CONFIG);
+      return addExperience(player, 50, DEFAULT_CONFIG).player;
     default:
       return player;
   }
