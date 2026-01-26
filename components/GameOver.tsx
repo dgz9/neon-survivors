@@ -95,8 +95,9 @@ export default function GameOver({
   }, []);
 
   return (
-    <div className="fixed inset-0 bg-brutal-black/95 flex items-center justify-center p-4 z-50 overflow-y-auto">
-      <div className="w-full max-w-lg my-8">
+    <div className="fixed inset-0 bg-brutal-black/95 z-50 overflow-y-auto">
+      <div className="min-h-full flex items-center justify-center p-4">
+        <div className="w-full max-w-lg py-8">
         {/* Game Over Header */}
         <div className="text-center mb-8">
           <div className="font-display text-6xl sm:text-8xl text-electric-pink mb-2 glitch-text" data-text="GAME OVER">
@@ -254,6 +255,7 @@ export default function GameOver({
           >
             Menu
           </button>
+        </div>
         </div>
       </div>
     </div>
