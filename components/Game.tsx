@@ -44,6 +44,9 @@ export default function Game({ playerImageUrl, playerName, onGameOver, onBack }:
   } | null>(null);
   const [showUpgrades, setShowUpgrades] = useState(false);
   const [availableUpgrades, setAvailableUpgrades] = useState<Upgrade[]>([]);
+  const [showPowerupLegend, setShowPowerupLegend] = useState(false);
+  const gamepadIndexRef = useRef<number | null>(null);
+  const lastPausePress = useRef<number>(0);
 
   // Handle resize
   useEffect(() => {
@@ -132,11 +135,33 @@ export default function Game({ playerImageUrl, playerName, onGameOver, onBack }:
       inputRef.current.mouseDown = false;
     };
 
+    const handleGamepadConnected = (e: GamepadEvent) => {
+      console.log('Gamepad connected:', e.gamepad.id);
+      gamepadIndexRef.current = e.gamepad.index;
+    };
+
+    const handleGamepadDisconnected = (e: GamepadEvent) => {
+      if (gamepadIndexRef.current === e.gamepad.index) {
+        gamepadIndexRef.current = null;
+      }
+    };
+
     window.addEventListener('keydown', handleKeyDown);
     window.addEventListener('keyup', handleKeyUp);
     window.addEventListener('mousemove', handleMouseMove);
     window.addEventListener('mousedown', handleMouseDown);
     window.addEventListener('mouseup', handleMouseUp);
+    window.addEventListener('gamepadconnected', handleGamepadConnected);
+    window.addEventListener('gamepaddisconnected', handleGamepadDisconnected);
+
+    // Check for already connected gamepads
+    const gamepads = navigator.getGamepads();
+    for (const gp of gamepads) {
+      if (gp) {
+        gamepadIndexRef.current = gp.index;
+        break;
+      }
+    }
 
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
@@ -144,6 +169,8 @@ export default function Game({ playerImageUrl, playerName, onGameOver, onBack }:
       window.removeEventListener('mousemove', handleMouseMove);
       window.removeEventListener('mousedown', handleMouseDown);
       window.removeEventListener('mouseup', handleMouseUp);
+      window.removeEventListener('gamepadconnected', handleGamepadConnected);
+      window.removeEventListener('gamepaddisconnected', handleGamepadDisconnected);
     };
   }, []);
 
@@ -163,6 +190,48 @@ export default function Game({ playerImageUrl, playerName, onGameOver, onBack }:
 
       const deltaTime = Math.min((timestamp - lastTimeRef.current) / 16.67, 3);
       lastTimeRef.current = timestamp;
+
+      // Poll gamepad input
+      if (gamepadIndexRef.current !== null) {
+        const gamepad = navigator.getGamepads()[gamepadIndexRef.current];
+        if (gamepad) {
+          // Left stick for movement (axes 0 and 1)
+          const deadzone = 0.15;
+          const lx = Math.abs(gamepad.axes[0]) > deadzone ? gamepad.axes[0] : 0;
+          const ly = Math.abs(gamepad.axes[1]) > deadzone ? gamepad.axes[1] : 0;
+          
+          // Map stick to WASD keys
+          if (ly < -0.3) inputRef.current.keys.add('w');
+          else inputRef.current.keys.delete('w');
+          if (ly > 0.3) inputRef.current.keys.add('s');
+          else inputRef.current.keys.delete('s');
+          if (lx < -0.3) inputRef.current.keys.add('a');
+          else inputRef.current.keys.delete('a');
+          if (lx > 0.3) inputRef.current.keys.add('d');
+          else inputRef.current.keys.delete('d');
+          
+          // Right stick for aiming (axes 2 and 3)
+          const rx = Math.abs(gamepad.axes[2]) > deadzone ? gamepad.axes[2] : 0;
+          const ry = Math.abs(gamepad.axes[3]) > deadzone ? gamepad.axes[3] : 0;
+          
+          if (Math.abs(rx) > deadzone || Math.abs(ry) > deadzone) {
+            // Convert right stick to mouse position relative to player
+            if (gameStateRef.current) {
+              const aimDistance = 200;
+              inputRef.current.mousePos = {
+                x: gameStateRef.current.player.position.x + rx * aimDistance,
+                y: gameStateRef.current.player.position.y + ry * aimDistance,
+              };
+            }
+          }
+          
+          // Start button (button 9) to pause - with debounce
+          if (gamepad.buttons[9]?.pressed && timestamp - lastPausePress.current > 300) {
+            lastPausePress.current = timestamp;
+            setIsPaused(p => !p);
+          }
+        }
+      }
 
       if (!isPaused && !showUpgrades && gameStateRef.current.isRunning) {
         gameStateRef.current = updateGameState(
@@ -337,12 +406,60 @@ export default function Game({ playerImageUrl, playerName, onGameOver, onBack }:
         />
       </div>
 
+      {/* Powerup Legend */}
+      {showPowerupLegend && (
+        <div className="absolute bottom-16 left-4 bg-brutal-dark/95 border border-white/20 p-4 z-20 text-xs font-mono">
+          <div className="text-white/60 uppercase tracking-wider mb-3">Powerups</div>
+          <div className="space-y-2">
+            <div className="flex items-center gap-3">
+              <span className="text-lg">❤</span>
+              <span className="text-green-400">Health</span>
+              <span className="text-white/40">+25 HP</span>
+            </div>
+            <div className="flex items-center gap-3">
+              <span className="text-lg">⚡</span>
+              <span className="text-yellow-400">Speed</span>
+              <span className="text-white/40">+50% speed (temp)</span>
+            </div>
+            <div className="flex items-center gap-3">
+              <span className="text-lg">💥</span>
+              <span className="text-pink-400">Damage</span>
+              <span className="text-white/40">+50% damage (temp)</span>
+            </div>
+            <div className="flex items-center gap-3">
+              <span className="text-lg">🧲</span>
+              <span className="text-purple-400">Magnet</span>
+              <span className="text-white/40">Pulls XP orbs (temp)</span>
+            </div>
+            <div className="flex items-center gap-3">
+              <span className="text-lg">💣</span>
+              <span className="text-orange-400">Bomb</span>
+              <span className="text-white/40">Clears nearby enemies</span>
+            </div>
+            <div className="flex items-center gap-3">
+              <span className="text-lg">✨</span>
+              <span className="text-cyan-400">XP</span>
+              <span className="text-white/40">+50 experience</span>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Controls hint */}
-      <div className="h-10 flex items-center justify-center gap-8 px-4 border-t border-white/10 bg-brutal-dark/80 backdrop-blur-sm text-xs font-mono text-white/40">
-        <span>WASD / Arrows to move</span>
-        <span>Mouse to aim</span>
-        <span>Auto-fire enabled</span>
-        <span>ESC to pause</span>
+      <div className="h-10 flex items-center justify-between px-4 border-t border-white/10 bg-brutal-dark/80 backdrop-blur-sm text-xs font-mono text-white/40">
+        <button
+          onClick={() => setShowPowerupLegend(p => !p)}
+          className="hover:text-electric-cyan transition-colors"
+        >
+          [?] Powerups
+        </button>
+        <div className="flex items-center gap-6">
+          <span>WASD / 🎮 Left Stick</span>
+          <span>Mouse / 🎮 Right Stick to aim</span>
+          <span>Auto-fire</span>
+          <span>ESC / Start to pause</span>
+        </div>
+        <div className="w-20" />
       </div>
     </div>
   );

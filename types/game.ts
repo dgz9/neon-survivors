@@ -61,6 +61,8 @@ export interface Projectile {
     owner: Vector2;
   };
   lifetime?: number;
+  weaponType?: WeaponType;
+  explosionRadius?: number;
 }
 
 export interface Weapon {

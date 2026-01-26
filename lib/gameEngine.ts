@@ -458,6 +458,8 @@ function fireWeapons(player: Player, mousePos: Vector2, currentTime: number): Pr
         isEnemy: false,
         piercing: weapon.piercing,
         hitEnemies: new Set(),
+        weaponType: weapon.type,
+        explosionRadius: weapon.type === 'missile' ? 80 + weapon.level * 20 : undefined,
       });
     }
   });
@@ -578,6 +580,87 @@ function checkProjectileCollisions(
           maxLife: 150,
           type: 'ring',
         });
+
+        // Missile explosion - damage all enemies in radius
+        if (projectile.weaponType === 'missile' && projectile.explosionRadius) {
+          const explosionRadius = projectile.explosionRadius;
+          
+          // Create big explosion visual
+          for (let i = 0; i < 20; i++) {
+            const expAngle = (i / 20) * Math.PI * 2;
+            const expSpeed = 3 + Math.random() * 5;
+            damageParticles.push({
+              id: generateId(),
+              position: { ...projectile.position },
+              velocity: {
+                x: Math.cos(expAngle) * expSpeed,
+                y: Math.sin(expAngle) * expSpeed,
+              },
+              color: COLORS.orange,
+              size: 6 + Math.random() * 4,
+              life: 300 + Math.random() * 200,
+              maxLife: 500,
+              type: 'explosion',
+            });
+          }
+          
+          // Explosion rings
+          damageParticles.push({
+            id: generateId(),
+            position: { ...projectile.position },
+            velocity: { x: 0, y: 0 },
+            color: COLORS.orange,
+            size: explosionRadius,
+            life: 300,
+            maxLife: 300,
+            type: 'ring',
+          });
+          damageParticles.push({
+            id: generateId(),
+            position: { ...projectile.position },
+            velocity: { x: 0, y: 0 },
+            color: COLORS.yellow,
+            size: explosionRadius * 0.6,
+            life: 200,
+            maxLife: 200,
+            type: 'ring',
+          });
+          
+          // Damage all enemies in explosion radius
+          updatedEnemies.forEach((otherEnemy, idx) => {
+            if (otherEnemy.id === enemy.id) return; // Already damaged
+            const edx = otherEnemy.position.x - projectile.position.x;
+            const edy = otherEnemy.position.y - projectile.position.y;
+            const eDist = Math.sqrt(edx * edx + edy * edy);
+            
+            if (eDist < explosionRadius) {
+              // Damage falls off with distance
+              const falloff = 1 - (eDist / explosionRadius) * 0.5;
+              const splashDamage = projectile.damage * falloff * 0.7;
+              otherEnemy.health -= splashDamage;
+              
+              // Damage number for splash
+              damageParticles.push({
+                id: generateId(),
+                position: { ...otherEnemy.position },
+                velocity: { x: (Math.random() - 0.5) * 2, y: -3 },
+                color: COLORS.orange,
+                size: 8,
+                life: 300,
+                maxLife: 300,
+                type: 'text',
+                text: Math.floor(splashDamage).toString(),
+              });
+              
+              if (otherEnemy.health <= 0 && !killedEnemies.find(k => k.id === otherEnemy.id)) {
+                killedEnemies.push(otherEnemy);
+              }
+            }
+          });
+          
+          // Remove dead enemies from splash damage
+          updatedEnemies = updatedEnemies.filter(e => !killedEnemies.find(k => k.id === e.id));
+        }
 
         if (enemy.health <= 0) {
           killedEnemies.push(enemy);
@@ -914,8 +997,8 @@ export function applyUpgrade(state: GameState, upgrade: Upgrade): GameState {
         };
         break;
       case 'speed':
-        // Cap speed at 12 to keep it controllable
-        player = { ...player, speed: Math.min(12, player.speed * 1.15) };
+        // Cap speed at 8 to keep it controllable, smaller boost
+        player = { ...player, speed: Math.min(8, player.speed * 1.1) };
         break;
       case 'magnet':
         // Magnet range is in config, we'll track it on player
