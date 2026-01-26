@@ -1,16 +1,44 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { kv } from '@vercel/kv';
+import { neon, NeonQueryFunction } from '@neondatabase/serverless';
 
-const LEADERBOARD_KEY = 'neon-survivors:leaderboard';
-const MAX_ENTRIES = 100;
+// Lazy initialization - only connect when needed
+let sql: NeonQueryFunction<false, false> | null = null;
 
-interface LeaderboardEntry {
-  id: string;
-  name: string;
-  score: number;
-  wave: number;
-  kills: number;
-  timestamp: number;
+function getDb() {
+  if (!sql) {
+    if (!process.env.DATABASE_URL) {
+      throw new Error('DATABASE_URL not configured');
+    }
+    sql = neon(process.env.DATABASE_URL);
+  }
+  return sql;
+}
+
+// Initialize table on first request
+let tableInitialized = false;
+
+async function initTable() {
+  if (tableInitialized) return;
+  
+  const db = getDb();
+  
+  await db`
+    CREATE TABLE IF NOT EXISTS leaderboard (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      score INTEGER NOT NULL,
+      wave INTEGER DEFAULT 1,
+      kills INTEGER DEFAULT 0,
+      created_at TIMESTAMP DEFAULT NOW()
+    )
+  `;
+  
+  // Create index for faster sorting
+  await db`
+    CREATE INDEX IF NOT EXISTS idx_leaderboard_score ON leaderboard(score DESC)
+  `;
+  
+  tableInitialized = true;
 }
 
 // Generate unique ID
@@ -20,26 +48,32 @@ function generateId() {
 
 export async function GET() {
   try {
-    // Get leaderboard from KV store
-    const entries = await kv.zrange<LeaderboardEntry[]>(
-      LEADERBOARD_KEY, 
-      0, 
-      MAX_ENTRIES - 1, 
-      { rev: true }
-    );
+    await initTable();
+    
+    const db = getDb();
+    const entries = await db`
+      SELECT id, name, score, wave, kills, created_at as timestamp
+      FROM leaderboard
+      ORDER BY score DESC
+      LIMIT 100
+    `;
 
     return NextResponse.json({
-      entries: entries || [],
+      entries: entries.map(e => ({
+        ...e,
+        timestamp: new Date(e.timestamp).getTime()
+      })),
     });
   } catch (error) {
     console.error('Failed to fetch leaderboard:', error);
-    // Return empty array on error (e.g., KV not configured)
     return NextResponse.json({ entries: [] });
   }
 }
 
 export async function POST(request: NextRequest) {
   try {
+    await initTable();
+    
     const body = await request.json();
     const { name, score, wave, kills } = body;
 
@@ -51,36 +85,40 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Invalid score' }, { status: 400 });
     }
 
-    // Create entry
-    const entry: LeaderboardEntry = {
-      id: generateId(),
-      name: name.trim(),
-      score: Math.floor(score),
-      wave: wave || 1,
-      kills: kills || 0,
-      timestamp: Date.now(),
-    };
+    const id = generateId();
+    const cleanName = name.trim();
+    const finalScore = Math.floor(score);
+    const finalWave = wave || 1;
+    const finalKills = kills || 0;
 
-    // Add to sorted set (score is used for sorting)
-    await kv.zadd(LEADERBOARD_KEY, {
-      score: entry.score,
-      member: JSON.stringify(entry),
-    });
+    const db = getDb();
+    
+    // Insert entry
+    await db`
+      INSERT INTO leaderboard (id, name, score, wave, kills)
+      VALUES (${id}, ${cleanName}, ${finalScore}, ${finalWave}, ${finalKills})
+    `;
 
-    // Trim to keep only top entries
-    const count = await kv.zcard(LEADERBOARD_KEY);
-    if (count > MAX_ENTRIES * 2) {
-      // Remove lowest scores
-      await kv.zremrangebyrank(LEADERBOARD_KEY, 0, count - MAX_ENTRIES - 1);
-    }
-
-    // Calculate rank
-    const rank = await kv.zrevrank(LEADERBOARD_KEY, JSON.stringify(entry));
+    // Get rank
+    const rankResult = await db`
+      SELECT COUNT(*) + 1 as rank
+      FROM leaderboard
+      WHERE score > ${finalScore}
+    `;
+    
+    const rank = rankResult[0]?.rank || 1;
 
     return NextResponse.json({
       success: true,
-      entry,
-      rank: rank !== null ? rank + 1 : null,
+      entry: {
+        id,
+        name: cleanName,
+        score: finalScore,
+        wave: finalWave,
+        kills: finalKills,
+        timestamp: Date.now(),
+      },
+      rank,
     });
   } catch (error) {
     console.error('Failed to submit score:', error);
