@@ -47,6 +47,7 @@ export function createPartySocket(
   socket.addEventListener("message", (event) => {
     try {
       const data = JSON.parse(event.data) as MultiplayerMessage;
+      console.log('[SOCKET] Raw message received, type:', data.type);
       onMessage(data);
     } catch (e) {
       console.error("Failed to parse message:", e);

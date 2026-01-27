@@ -96,14 +96,19 @@ export default class NeonSurvivorsParty implements Party.Server {
           if (this.hostId && this.hostId !== sender.id) {
             const host = this.players.get(this.hostId);
             if (host) {
+              console.log(`[SERVER] Forwarding player-input from ${sender.id} to host ${this.hostId}`);
               host.connection.send(message);
             }
           }
           break;
         case "game-state":
           // Host sends game state to all other players
+          console.log(`[SERVER] game-state from ${sender.id}, hostId=${this.hostId}, players=${this.players.size}`);
           if (sender.id === this.hostId) {
+            console.log(`[SERVER] Broadcasting game-state to ${this.players.size - 1} other players`);
             this.broadcastExcept(message, sender.id);
+          } else {
+            console.log(`[SERVER] Ignoring game-state - sender is not host`);
           }
           break;
         case "start-game":
