@@ -101,9 +101,20 @@ export default function CoopGame({
     return () => window.removeEventListener('resize', handleResize);
   }, []);
 
-  // Initialize game (host only creates initial state)
+  // Initialize game (host creates full state, guest creates placeholder)
   const initGame = useCallback(async () => {
     if (!isHost) {
+      // Guest: create a minimal state that can be rendered while waiting for sync
+      let state = createInitialGameState(
+        myPlayer?.imageUrl || '',
+        dimensions.width,
+        dimensions.height,
+        DEFAULT_CONFIG
+      );
+      state = { ...state, arena };
+      state = await loadPlayerImage(state);
+      state.player.color = PLAYER_COLORS[1]; // Guest is P2 (pink)
+      gameStateRef.current = state;
       setIsLoading(false);
       return;
     }
@@ -198,30 +209,46 @@ export default function CoopGame({
           };
         } else if (data.type === 'game-state' && !isHost) {
           // Guest receives game state from host
-          const state = data.state as {
+          const receivedState = data.state as {
             player: Player;
             player2: Player;
             score: number;
             wave: number;
+            multiplier: number;
             enemies: unknown[];
             projectiles: unknown[];
             powerups: unknown[];
             experienceOrbs: unknown[];
             particles: unknown[];
             isGameOver: boolean;
+            isRunning: boolean;
           };
           
           if (gameStateRef.current) {
-            // Update local state with received data
-            Object.assign(gameStateRef.current, {
-              ...state,
-              player: state.player,
+            // Update local state with received data, preserving local fields
+            gameStateRef.current.player = receivedState.player;
+            gameStateRef.current.score = receivedState.score;
+            gameStateRef.current.wave = receivedState.wave;
+            gameStateRef.current.multiplier = receivedState.multiplier || 1;
+            gameStateRef.current.enemies = receivedState.enemies as typeof gameStateRef.current.enemies;
+            gameStateRef.current.projectiles = receivedState.projectiles as typeof gameStateRef.current.projectiles;
+            gameStateRef.current.powerups = receivedState.powerups as typeof gameStateRef.current.powerups;
+            gameStateRef.current.experienceOrbs = receivedState.experienceOrbs as typeof gameStateRef.current.experienceOrbs;
+            gameStateRef.current.particles = receivedState.particles as typeof gameStateRef.current.particles;
+            gameStateRef.current.isGameOver = receivedState.isGameOver;
+            gameStateRef.current.isRunning = receivedState.isRunning;
+            player2Ref.current = receivedState.player2;
+            
+            // Update display state for guest
+            setDisplayState({
+              score: receivedState.score,
+              wave: receivedState.wave,
+              health: receivedState.player.health,
+              maxHealth: receivedState.player.maxHealth,
+              health2: receivedState.player2?.health || 0,
+              maxHealth2: receivedState.player2?.maxHealth || 100,
+              level: receivedState.player.level,
             });
-            player2Ref.current = state.player2;
-          } else {
-            // First state received - initialize
-            gameStateRef.current = state as unknown as GameState;
-            player2Ref.current = state.player2;
           }
         }
       } catch (e) {
@@ -427,12 +454,14 @@ export default function CoopGame({
             player2: player2Ref.current,
             score: gameStateRef.current.score,
             wave: gameStateRef.current.wave,
+            multiplier: gameStateRef.current.multiplier,
             enemies: gameStateRef.current.enemies,
             projectiles: gameStateRef.current.projectiles,
             powerups: gameStateRef.current.powerups,
             experienceOrbs: gameStateRef.current.experienceOrbs,
             particles: gameStateRef.current.particles,
             isGameOver: gameStateRef.current.isGameOver,
+            isRunning: gameStateRef.current.isRunning,
           });
         }
 
