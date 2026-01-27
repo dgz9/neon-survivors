@@ -104,7 +104,7 @@ export default function Leaderboard({ isOpen, onClose }: LeaderboardProps) {
                       <span className={`font-display text-lg ${
                         index === 0 ? 'text-electric-yellow' :
                         index === 1 ? 'text-white/60' :
-                        index === 2 ? 'text-orange-400' :
+                        index === 2 ? 'text-electric-orange' :
                         'text-white/30'
                       }`}>
                         {index + 1}

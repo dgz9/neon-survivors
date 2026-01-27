@@ -509,15 +509,15 @@ export default function Game({ playerImageUrl, playerName, arena = 'grid', onGam
           <div className="absolute top-14 left-2 flex flex-col gap-1 text-xs font-mono z-10">
             {/* Permanent stat bonuses */}
             {displayState.speedBonus > 0 && (
-              <div className="flex items-center gap-2 bg-brutal-dark/80 px-2 py-1 border border-yellow-400/30">
+              <div className="flex items-center gap-2 bg-brutal-dark/80 px-2 py-1 border border-electric-yellow/30">
                 <span>⚡</span>
-                <span className="text-yellow-400">Speed +{Math.round(displayState.speedBonus / 0.5)}</span>
+                <span className="text-electric-yellow">Speed +{Math.round(displayState.speedBonus / 0.5)}</span>
               </div>
             )}
             {displayState.magnetBonus > 0 && (
-              <div className="flex items-center gap-2 bg-brutal-dark/80 px-2 py-1 border border-purple-400/30">
+              <div className="flex items-center gap-2 bg-brutal-dark/80 px-2 py-1 border border-electric-purple/30">
                 <span>🧲</span>
-                <span className="text-purple-400">Magnet +{Math.round(displayState.magnetBonus / 0.3)}</span>
+                <span className="text-electric-purple">Magnet +{Math.round(displayState.magnetBonus / 0.3)}</span>
               </div>
             )}
             
@@ -526,9 +526,9 @@ export default function Game({ playerImageUrl, playerName, arena = 'grid', onGam
               const maxDuration = buff.type === 'magnet' ? 15000 : 10000;
               const percent = (buff.remainingMs / maxDuration) * 100;
               const colors: Record<string, string> = {
-                speed: 'bg-yellow-400',
-                damage: 'bg-pink-400',
-                magnet: 'bg-purple-400',
+                speed: 'bg-electric-yellow',
+                damage: 'bg-electric-pink',
+                magnet: 'bg-electric-purple',
               };
               const icons: Record<string, string> = {
                 speed: '⚡',
@@ -559,32 +559,32 @@ export default function Game({ playerImageUrl, playerName, arena = 'grid', onGam
           <div className="space-y-2">
             <div className="flex items-center gap-3">
               <span className="text-lg">❤</span>
-              <span className="text-green-400">Health</span>
+              <span className="text-electric-green">Health</span>
               <span className="text-white/40">+25 HP</span>
             </div>
             <div className="flex items-center gap-3">
               <span className="text-lg">⚡</span>
-              <span className="text-yellow-400">Speed</span>
+              <span className="text-electric-yellow">Speed</span>
               <span className="text-white/40">+50% speed (temp)</span>
             </div>
             <div className="flex items-center gap-3">
               <span className="text-lg">💥</span>
-              <span className="text-pink-400">Damage</span>
+              <span className="text-electric-pink">Damage</span>
               <span className="text-white/40">+50% damage (temp)</span>
             </div>
             <div className="flex items-center gap-3">
               <span className="text-lg">🧲</span>
-              <span className="text-purple-400">Magnet</span>
+              <span className="text-electric-purple">Magnet</span>
               <span className="text-white/40">Pulls XP orbs (temp)</span>
             </div>
             <div className="flex items-center gap-3">
               <span className="text-lg">💣</span>
-              <span className="text-orange-400">Bomb</span>
+              <span className="text-electric-orange">Bomb</span>
               <span className="text-white/40">Clears nearby enemies</span>
             </div>
             <div className="flex items-center gap-3">
               <span className="text-lg">✨</span>
-              <span className="text-cyan-400">XP</span>
+              <span className="text-electric-cyan">XP</span>
               <span className="text-white/40">+50 experience</span>
             </div>
           </div>

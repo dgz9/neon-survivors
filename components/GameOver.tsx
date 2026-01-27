@@ -141,7 +141,7 @@ export default function GameOver({
               </div>
               <div className="flex justify-between">
                 <span className="text-white/60">Damage Taken</span>
-                <span className="text-orange-400">{Math.floor(stats.totalDamageTaken).toLocaleString()}</span>
+                <span className="text-electric-orange">{Math.floor(stats.totalDamageTaken).toLocaleString()}</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-white/60">Time Survived</span>
@@ -221,7 +221,7 @@ export default function GameOver({
                   <span className={`font-display text-lg w-8 ${
                     index === 0 ? 'text-electric-yellow' :
                     index === 1 ? 'text-white/60' :
-                    index === 2 ? 'text-orange-400' :
+                    index === 2 ? 'text-electric-orange' :
                     'text-white/30'
                   }`}>
                     {index + 1}
@@ -245,13 +245,13 @@ export default function GameOver({
         <div className="flex gap-4">
           <button
             onClick={onPlayAgain}
-            className="flex-1 py-4 font-display text-lg uppercase tracking-wider bg-electric-cyan text-brutal-black hover:bg-white transition-colors"
+            className="flex-1 btn-brutal py-4 font-display text-lg"
           >
             Play Again
           </button>
           <button
             onClick={onBackToMenu}
-            className="flex-1 py-4 font-display text-lg uppercase tracking-wider border-2 border-white/20 text-white/60 hover:border-white hover:text-white transition-colors"
+            className="flex-1 btn-brutal-outline py-4 font-display text-lg"
           >
             Menu
           </button>
