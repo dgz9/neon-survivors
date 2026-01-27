@@ -235,6 +235,11 @@ export default function CoopGame({
       try {
         const data = JSON.parse(event.data) as MultiplayerMessage;
         
+        // Debug: log all incoming messages
+        if (!isHost) {
+          console.log('[GUEST] Received message type:', data.type);
+        }
+        
         if (data.type === 'player-input' && isHost) {
           // Host receives guest input
           console.log('[HOST] Received guest input:', data.keys);
@@ -505,6 +510,7 @@ export default function CoopGame({
         // Sync state to guest
         if (timestamp - lastSyncRef.current > SYNC_INTERVAL) {
           lastSyncRef.current = timestamp;
+          console.log('[HOST] Sending game state to guest, enemies:', gameStateRef.current.enemies.length);
           sendGameState(socket, {
             player: gameStateRef.current.player,
             player2: player2Ref.current,

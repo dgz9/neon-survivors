@@ -87,11 +87,26 @@ export function sendInput(
 }
 
 export function sendGameState(socket: PartySocket, state: unknown) {
-  socket.send(JSON.stringify({
-    type: "game-state",
-    state,
-    hostId: socket.id,
-  }));
+  try {
+    // Custom serializer to handle Sets (convert to arrays)
+    const serialized = JSON.stringify({
+      type: "game-state",
+      state,
+      hostId: socket.id,
+    }, (key, value) => {
+      if (value instanceof Set) {
+        return Array.from(value);
+      }
+      // Skip image objects (can't serialize HTMLImageElement)
+      if (key === 'image' && value && typeof value === 'object') {
+        return null;
+      }
+      return value;
+    });
+    socket.send(serialized);
+  } catch (e) {
+    console.error('[HOST] Failed to serialize game state:', e);
+  }
 }
 
 export function startGame(socket: PartySocket, arena: string) {
