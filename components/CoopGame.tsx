@@ -108,6 +108,8 @@ export default function CoopGame({
   const initGame = useCallback(async () => {
     if (!isHost) {
       // Guest: create a minimal state and load BOTH player images
+      console.log('[GUEST] Initializing - loading images for P1:', otherPlayer?.imageUrl, 'P2:', myPlayer?.imageUrl);
+      
       let state = createInitialGameState(
         otherPlayer?.imageUrl || '', // Use host's (P1) image for main player display
         dimensions.width,
@@ -118,6 +120,7 @@ export default function CoopGame({
       state = await loadPlayerImage(state);
       state.player.color = PLAYER_COLORS[0]; // P1 is cyan
       p1ImageRef.current = state.player.image; // Cache P1 image
+      console.log('[GUEST] P1 image loaded:', !!p1ImageRef.current);
       
       // Also load P2 (guest's own) image
       if (myPlayer?.imageUrl) {
@@ -127,9 +130,13 @@ export default function CoopGame({
           await new Promise<void>((resolve, reject) => {
             img.onload = () => {
               p2ImageRef.current = img;
+              console.log('[GUEST] P2 image loaded successfully');
               resolve();
             };
-            img.onerror = reject;
+            img.onerror = (e) => {
+              console.error('[GUEST] P2 image load error:', e);
+              reject(e);
+            };
             img.src = myPlayer.imageUrl;
           });
         } catch (e) {
@@ -139,6 +146,7 @@ export default function CoopGame({
       
       state = startGame(state); // Start the game so isRunning is true
       gameStateRef.current = state;
+      console.log('[GUEST] Init complete, isRunning:', state.isRunning);
       setIsLoading(false);
       return;
     }
@@ -251,11 +259,19 @@ export default function CoopGame({
             isRunning: boolean;
           };
           
+          console.log('[GUEST] Received game state:', {
+            p1Pos: receivedState.player?.position,
+            p2Pos: receivedState.player2?.position,
+            enemies: receivedState.enemies?.length,
+            isRunning: receivedState.isRunning,
+          });
+          
           if (gameStateRef.current) {
             // Update local state with received data, preserving local fields
             gameStateRef.current.player = receivedState.player;
             // Restore cached P1 image (can't serialize HTMLImageElement)
             gameStateRef.current.player.image = p1ImageRef.current;
+            console.log('[GUEST] P1 image restored:', !!p1ImageRef.current);
             
             gameStateRef.current.score = receivedState.score;
             gameStateRef.current.wave = receivedState.wave;
@@ -271,6 +287,7 @@ export default function CoopGame({
             // Restore cached P2 image
             if (player2Ref.current) {
               player2Ref.current.image = p2ImageRef.current;
+              console.log('[GUEST] P2 image restored:', !!p2ImageRef.current);
             }
             
             // Update display state for guest
@@ -561,31 +578,56 @@ export default function CoopGame({
       if (gameStateRef.current) {
         renderGame(ctx, gameStateRef.current, dimensions.width, dimensions.height, timestamp);
         
-        // Render player 2
+        // Render player 2 with octagonal border (same style as P1)
         if (player2Ref.current) {
           const p2 = player2Ref.current;
-          ctx.save();
+          const isInvulnerable = Date.now() < p2.invulnerableUntil;
+          const flash = isInvulnerable && Math.floor(timestamp / 100) % 2 === 0;
           
-          // Draw P2
+          ctx.save();
+          ctx.translate(p2.position.x, p2.position.y);
+          ctx.globalAlpha = flash ? 0.5 : 1;
+          
+          // Octagonal border
+          ctx.strokeStyle = p2.color;
+          ctx.lineWidth = 3;
+          const sides = 8;
+          ctx.beginPath();
+          for (let i = 0; i < sides; i++) {
+            const angle = (i / sides) * Math.PI * 2 - Math.PI / 2;
+            const x = Math.cos(angle) * p2.radius;
+            const y = Math.sin(angle) * p2.radius;
+            if (i === 0) ctx.moveTo(x, y);
+            else ctx.lineTo(x, y);
+          }
+          ctx.closePath();
+          ctx.stroke();
+          
+          // Draw image or fill inside octagon
+          ctx.save();
+          ctx.beginPath();
+          for (let i = 0; i < sides; i++) {
+            const angle = (i / sides) * Math.PI * 2 - Math.PI / 2;
+            const x = Math.cos(angle) * (p2.radius - 3);
+            const y = Math.sin(angle) * (p2.radius - 3);
+            if (i === 0) ctx.moveTo(x, y);
+            else ctx.lineTo(x, y);
+          }
+          ctx.closePath();
+          ctx.clip();
+          
           if (p2.image) {
-            ctx.beginPath();
-            ctx.arc(p2.position.x, p2.position.y, p2.radius, 0, Math.PI * 2);
-            ctx.clip();
-            ctx.drawImage(
-              p2.image,
-              p2.position.x - p2.radius,
-              p2.position.y - p2.radius,
-              p2.radius * 2,
-              p2.radius * 2
-            );
+            const size = (p2.radius - 3) * 2;
+            ctx.drawImage(p2.image, -p2.radius + 3, -p2.radius + 3, size, size);
           } else {
-            ctx.fillStyle = p2.color;
-            ctx.beginPath();
-            ctx.arc(p2.position.x, p2.position.y, p2.radius, 0, Math.PI * 2);
+            ctx.fillStyle = `${p2.color}44`;
             ctx.fill();
           }
+          ctx.restore();
           
-          // P2 health bar
+          ctx.restore();
+          
+          // P2 health bar (outside the transform)
           const healthPercent = p2.health / p2.maxHealth;
           ctx.fillStyle = '#141414';
           ctx.fillRect(p2.position.x - 20, p2.position.y - p2.radius - 12, 40, 6);
@@ -597,8 +639,6 @@ export default function CoopGame({
           ctx.font = '10px "JetBrains Mono"';
           ctx.textAlign = 'center';
           ctx.fillText('P2', p2.position.x, p2.position.y - p2.radius - 16);
-          
-          ctx.restore();
         }
         
         // Draw P1 label
