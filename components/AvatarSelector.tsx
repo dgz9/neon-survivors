@@ -20,9 +20,10 @@ const PRESET_AVATARS = [
 
 interface AvatarSelectorProps {
   onSelect: (imageUrl: string, name: string) => void;
+  buttonText?: string;
 }
 
-export default function AvatarSelector({ onSelect }: AvatarSelectorProps) {
+export default function AvatarSelector({ onSelect, buttonText = '// START GAME' }: AvatarSelectorProps) {
   const [selectedAvatar, setSelectedAvatar] = useState<string | null>(null);
   const [customImage, setCustomImage] = useState<string | null>(null);
   const [playerName, setPlayerName] = useState('');
@@ -158,7 +159,7 @@ export default function AvatarSelector({ onSelect }: AvatarSelectorProps) {
               : 'bg-white/10 text-white/30 cursor-not-allowed'
           }`}
         >
-          {isReady ? '// START GAME' : '// SELECT AVATAR & NAME'}
+          {isReady ? buttonText : '// SELECT AVATAR & NAME'}
         </button>
       </div>
     </div>

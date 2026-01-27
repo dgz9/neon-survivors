@@ -11,10 +11,12 @@ import { Trophy, Users, User } from 'lucide-react';
 import PartySocket from 'partysocket';
 import { MultiplayerPlayer } from '@/lib/multiplayer';
 
-type GamePhase = 'menu' | 'mode-select' | 'lobby' | 'playing' | 'playing-coop' | 'gameover';
+type GamePhase = 'menu' | 'lobby' | 'playing' | 'playing-coop' | 'gameover';
+type GameMode = 'solo' | 'coop';
 
 export default function Home() {
   const [phase, setPhase] = useState<GamePhase>('menu');
+  const [gameMode, setGameMode] = useState<GameMode>('solo');
   const [playerImageUrl, setPlayerImageUrl] = useState('');
   const [playerName, setPlayerName] = useState('');
   const [gameStats, setGameStats] = useState<{
@@ -38,19 +40,16 @@ export default function Home() {
   const [coopPlayers, setCoopPlayers] = useState<MultiplayerPlayer[]>([]);
   const [isCoopHost, setIsCoopHost] = useState(false);
 
-  const handleAvatarSelect = useCallback((imageUrl: string, name: string) => {
+  const handleStartGame = useCallback((imageUrl: string, name: string) => {
     setPlayerImageUrl(imageUrl);
     setPlayerName(name);
-    setPhase('mode-select');
-  }, []);
-
-  const handleSoloMode = useCallback(() => {
-    setPhase('playing');
-  }, []);
-
-  const handleCoopMode = useCallback(() => {
-    setPhase('lobby');
-  }, []);
+    
+    if (gameMode === 'solo') {
+      setPhase('playing');
+    } else {
+      setPhase('lobby');
+    }
+  }, [gameMode]);
 
   const handleCoopStart = useCallback((socket: PartySocket, players: MultiplayerPlayer[], isHost: boolean) => {
     setCoopSocket(socket);
@@ -76,13 +75,12 @@ export default function Home() {
   }, [coopSocket]);
 
   const handlePlayAgain = useCallback(() => {
-    if (coopPlayers.length > 0) {
-      // Was a co-op game, go back to mode select
-      setPhase('mode-select');
+    if (gameMode === 'coop') {
+      setPhase('lobby');
     } else {
       setPhase('playing');
     }
-  }, [coopPlayers]);
+  }, [gameMode]);
 
   const handleBackToMenu = useCallback(() => {
     setPhase('menu');
@@ -92,20 +90,14 @@ export default function Home() {
     setCoopSocket(null);
   }, [coopSocket]);
 
-  const handleBackToModeSelect = useCallback(() => {
-    setPhase('mode-select');
-    coopSocket?.close();
-    setCoopSocket(null);
-  }, [coopSocket]);
-
   return (
     <div className="min-h-screen bg-brutal-black text-white">
       {phase === 'menu' && (
         <div className="flex flex-col items-center justify-start p-4 sm:p-8 min-h-screen">
           {/* Header */}
-          <header className="text-center mb-8 sm:mb-16 mt-8 sm:mt-12 relative z-10 w-full max-w-4xl">
+          <header className="text-center mb-6 sm:mb-10 mt-6 sm:mt-8 relative z-10 w-full max-w-4xl">
             {/* Top accent line */}
-            <div className="flex items-center gap-4 mb-6 sm:mb-8">
+            <div className="flex items-center gap-4 mb-4 sm:mb-6">
               <div className="h-[2px] flex-1 bg-gradient-to-r from-transparent via-electric-yellow/50 to-transparent" />
               <span className="text-[10px] sm:text-xs font-mono text-electric-yellow/60 tracking-[0.3em] uppercase">
                 Survival Arena v1.1
@@ -120,7 +112,7 @@ export default function Home() {
               </h1>
 
               {/* Subtitle with slashes */}
-              <div className="flex items-center justify-center gap-3 mt-4 sm:mt-6">
+              <div className="flex items-center justify-center gap-3 mt-3 sm:mt-4">
                 <span className="text-electric-pink font-mono text-lg sm:text-xl">{'//'}</span>
                 <p className="font-mono text-xs sm:text-sm tracking-[0.2em] uppercase text-white/70">
                   Survive <span className="text-electric-cyan">.</span> Evolve <span className="text-electric-cyan">.</span> Dominate
@@ -134,11 +126,59 @@ export default function Home() {
             <div className="absolute top-0 right-0 w-8 h-8 border-r-2 border-t-2 border-electric-yellow/30" />
           </header>
 
+          {/* Game Mode Selection */}
+          <div className="w-full max-w-2xl mb-6">
+            <div className="flex items-center gap-3 mb-4">
+              <span className="text-electric-green font-display text-2xl">⚔</span>
+              <div className="h-[1px] flex-1 bg-white/10" />
+              <span className="font-mono text-xs text-white/40 uppercase tracking-wider">Game Mode</span>
+            </div>
+            
+            <div className="grid grid-cols-2 gap-4">
+              <button
+                onClick={() => setGameMode('solo')}
+                className={`p-4 border-2 transition-all flex items-center gap-3 ${
+                  gameMode === 'solo'
+                    ? 'border-electric-cyan bg-electric-cyan/10'
+                    : 'border-white/20 hover:border-white/40'
+                }`}
+              >
+                <User className={`w-6 h-6 ${gameMode === 'solo' ? 'text-electric-cyan' : 'text-white/60'}`} />
+                <div className="text-left">
+                  <div className={`font-display text-lg ${gameMode === 'solo' ? 'text-electric-cyan' : 'text-white/80'}`}>
+                    SOLO
+                  </div>
+                  <div className="font-mono text-[10px] text-white/40">Classic survival</div>
+                </div>
+              </button>
+              
+              <button
+                onClick={() => setGameMode('coop')}
+                className={`p-4 border-2 transition-all flex items-center gap-3 relative ${
+                  gameMode === 'coop'
+                    ? 'border-electric-pink bg-electric-pink/10'
+                    : 'border-white/20 hover:border-white/40'
+                }`}
+              >
+                <Users className={`w-6 h-6 ${gameMode === 'coop' ? 'text-electric-pink' : 'text-white/60'}`} />
+                <div className="text-left">
+                  <div className={`font-display text-lg ${gameMode === 'coop' ? 'text-electric-pink' : 'text-white/80'}`}>
+                    CO-OP
+                  </div>
+                  <div className="font-mono text-[10px] text-white/40">Team up with a friend</div>
+                </div>
+                <span className="absolute -top-2 -right-2 px-2 py-0.5 bg-electric-green text-brutal-black font-mono text-[10px] font-bold">
+                  NEW
+                </span>
+              </button>
+            </div>
+          </div>
+
           {/* Avatar selector */}
-          <AvatarSelector onSelect={handleAvatarSelect} />
+          <AvatarSelector onSelect={handleStartGame} buttonText={gameMode === 'solo' ? '// START GAME' : '// FIND TEAMMATE'} />
 
           {/* Arena Selection */}
-          <div className="w-full max-w-2xl mt-8">
+          <div className="w-full max-w-2xl mt-6">
             <div className="flex items-center gap-3 mb-4">
               <span className="text-electric-pink font-display text-2xl">◆</span>
               <div className="h-[1px] flex-1 bg-white/10" />
@@ -173,7 +213,7 @@ export default function Home() {
           {/* Leaderboard Button */}
           <button
             onClick={() => setShowLeaderboard(true)}
-            className="mt-8 flex items-center gap-3 px-6 py-3 border-2 border-electric-yellow/50 hover:border-electric-yellow hover:bg-electric-yellow/10 transition-all group"
+            className="mt-6 flex items-center gap-3 px-6 py-3 border-2 border-electric-yellow/50 hover:border-electric-yellow hover:bg-electric-yellow/10 transition-all group"
           >
             <Trophy className="w-5 h-5 text-electric-yellow" />
             <span className="font-mono text-sm uppercase tracking-wider text-electric-yellow">
@@ -182,7 +222,7 @@ export default function Home() {
           </button>
 
           {/* How to play */}
-          <div className="w-full max-w-2xl mt-12 mb-8">
+          <div className="w-full max-w-2xl mt-8 mb-6">
             <div className="flex items-center gap-3 mb-4">
               <span className="text-electric-cyan font-display text-2xl">?</span>
               <div className="h-[1px] flex-1 bg-white/10" />
@@ -214,8 +254,8 @@ export default function Home() {
           </div>
 
           {/* Footer */}
-          <footer className="mt-auto pb-8 relative z-10 w-full max-w-2xl">
-            <div className="h-[1px] bg-gradient-to-r from-transparent via-white/10 to-transparent mb-6" />
+          <footer className="mt-auto pb-6 relative z-10 w-full max-w-2xl">
+            <div className="h-[1px] bg-gradient-to-r from-transparent via-white/10 to-transparent mb-4" />
 
             <div className="flex flex-col sm:flex-row items-center justify-between gap-4 text-xs font-mono">
               <div className="text-white/30 uppercase tracking-wider">
@@ -237,62 +277,6 @@ export default function Home() {
         </div>
       )}
 
-      {/* Mode Selection */}
-      {phase === 'mode-select' && (
-        <div className="flex flex-col items-center justify-center min-h-screen p-4">
-          <div className="w-full max-w-md">
-            <div className="text-center mb-8">
-              <p className="font-mono text-sm text-white/60 mb-2">Welcome,</p>
-              <h2 className="font-display text-3xl text-electric-cyan">{playerName}</h2>
-            </div>
-
-            <div className="flex items-center gap-3 mb-6">
-              <div className="h-[1px] flex-1 bg-white/10" />
-              <span className="font-mono text-xs text-white/40 uppercase tracking-wider">Select Mode</span>
-              <div className="h-[1px] flex-1 bg-white/10" />
-            </div>
-
-            <div className="space-y-4">
-              <button
-                onClick={handleSoloMode}
-                className="w-full p-6 border-2 border-electric-cyan/50 hover:border-electric-cyan hover:bg-electric-cyan/10 transition-all group text-left"
-              >
-                <div className="flex items-center gap-4">
-                  <User className="w-8 h-8 text-electric-cyan" />
-                  <div>
-                    <div className="font-display text-2xl text-electric-cyan">SOLO</div>
-                    <p className="font-mono text-xs text-white/60">Classic survival mode</p>
-                  </div>
-                </div>
-              </button>
-
-              <button
-                onClick={handleCoopMode}
-                className="w-full p-6 border-2 border-electric-pink/50 hover:border-electric-pink hover:bg-electric-pink/10 transition-all group text-left"
-              >
-                <div className="flex items-center gap-4">
-                  <Users className="w-8 h-8 text-electric-pink" />
-                  <div>
-                    <div className="font-display text-2xl text-electric-pink">CO-OP</div>
-                    <p className="font-mono text-xs text-white/60">Team up with a friend</p>
-                  </div>
-                </div>
-                <div className="mt-3 px-2 py-1 bg-electric-green/20 border border-electric-green/30 inline-block">
-                  <span className="font-mono text-xs text-electric-green">NEW!</span>
-                </div>
-              </button>
-            </div>
-
-            <button
-              onClick={handleBackToMenu}
-              className="w-full mt-8 py-3 font-mono text-sm uppercase tracking-wider text-white/40 hover:text-white transition-colors"
-            >
-              {'<--'} Back to Menu
-            </button>
-          </div>
-        </div>
-      )}
-
       {/* Co-op Lobby */}
       {phase === 'lobby' && (
         <div className="flex flex-col items-center justify-center min-h-screen p-4">
@@ -301,7 +285,7 @@ export default function Home() {
             playerImageUrl={playerImageUrl}
             selectedArena={selectedArena}
             onStartGame={handleCoopStart}
-            onBack={handleBackToModeSelect}
+            onBack={handleBackToMenu}
           />
         </div>
       )}
