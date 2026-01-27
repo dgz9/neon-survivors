@@ -94,21 +94,58 @@ export default class NeonSurvivorsParty implements Party.Server {
         case "player-input":
           // Forward inputs to host
           if (this.hostId && this.hostId !== sender.id) {
+            // Make sure sender (guest) is in players map for broadcasts (handles reconnection)
+            if (this.gameStarted && !this.players.has(sender.id)) {
+              console.log(`[SERVER] Re-adding guest ${sender.id} to players map`);
+              this.players.set(sender.id, {
+                id: sender.id,
+                name: 'Guest',
+                imageUrl: '',
+                isHost: false,
+                connection: sender,
+              });
+            }
+            
             const host = this.players.get(this.hostId);
             if (host) {
-              console.log(`[SERVER] Forwarding player-input from ${sender.id} to host ${this.hostId}`);
               host.connection.send(message);
+            } else {
+              console.log(`[SERVER] Warning: host ${this.hostId} not in players map`);
             }
           }
           break;
         case "game-state":
           // Host sends game state to all other players
-          console.log(`[SERVER] game-state from ${sender.id}, hostId=${this.hostId}, players=${this.players.size}`);
-          if (sender.id === this.hostId) {
+          // During active game, trust game-state senders as the host (handles reconnection)
+          const gameStateMsg = data as GameStateSync;
+          
+          console.log(`[SERVER] game-state from ${sender.id}, current hostId=${this.hostId}, gameStarted=${this.gameStarted}, players=${this.players.size}`);
+          
+          // If game is started and we receive game-state, the sender is the host
+          // This handles reconnection where connection ID changes
+          if (this.gameStarted) {
+            // Update host tracking if needed
+            if (sender.id !== this.hostId) {
+              console.log(`[SERVER] Host reconnected: updating hostId from ${this.hostId} to ${sender.id}`);
+              this.hostId = sender.id;
+            }
+            
+            // Make sure sender is in players map (may have been removed on disconnect)
+            if (!this.players.has(sender.id)) {
+              console.log(`[SERVER] Re-adding host ${sender.id} to players map`);
+              this.players.set(sender.id, {
+                id: sender.id,
+                name: 'Host',
+                imageUrl: '',
+                isHost: true,
+                connection: sender,
+              });
+            }
+            
             console.log(`[SERVER] Broadcasting game-state to ${this.players.size - 1} other players`);
             this.broadcastExcept(message, sender.id);
           } else {
-            console.log(`[SERVER] Ignoring game-state - sender is not host`);
+            console.log(`[SERVER] Ignoring game-state - game not started`);
           }
           break;
         case "start-game":
