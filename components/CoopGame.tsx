@@ -114,6 +114,7 @@ export default function CoopGame({
       state = { ...state, arena };
       state = await loadPlayerImage(state);
       state.player.color = PLAYER_COLORS[1]; // Guest is P2 (pink)
+      state = startGame(state); // Start the game so isRunning is true
       gameStateRef.current = state;
       setIsLoading(false);
       return;
