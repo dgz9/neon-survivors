@@ -38,7 +38,7 @@ let storedPlayerInfo: { name: string; imageUrl: string } | null = null;
 
 export function createPartySocket(
   roomCode: string,
-  onMessage: (msg: MultiplayerMessage) => void,
+  _onMessage: (msg: MultiplayerMessage) => void, // Deprecated - use your own handler
   onOpen?: () => void,
   onClose?: () => void
 ): PartySocket {
@@ -47,20 +47,14 @@ export function createPartySocket(
     room: roomCode.toUpperCase(),
   });
 
-  socket.addEventListener("message", (event) => {
-    try {
-      const data = JSON.parse(event.data) as MultiplayerMessage;
-      console.log('[SOCKET] Raw message received, type:', data.type);
-      onMessage(data);
-    } catch (e) {
-      console.error("Failed to parse message:", e);
-    }
-  });
+  // NOTE: Message handler is NOT added here anymore to avoid stale closure issues.
+  // Each component should add its own message handler that it can properly manage.
+  // The _onMessage parameter is kept for backwards compatibility but not used.
 
   // Handle EVERY open event (including reconnections)
   socket.addEventListener("open", () => {
     console.log('[SOCKET] Connection opened/reconnected, id:', socket.id);
-    
+
     // Re-send player-join on reconnection if we have stored info
     if (storedPlayerInfo) {
       console.log('[SOCKET] Re-sending player-join after reconnection');
@@ -71,7 +65,7 @@ export function createPartySocket(
         imageUrl: storedPlayerInfo.imageUrl,
       }));
     }
-    
+
     if (onOpen) {
       onOpen();
     }

@@ -111,23 +111,28 @@ export default function Lobby({
   // NOTE: Do NOT close socket on unmount - it's passed to CoopGame
   // Socket is only closed when explicitly leaving the room (see Leave Room button)
 
-  // Update message handler when dependencies change
+  // Use a ref to always have access to the latest handleMessage callback
+  const handleMessageRef = useRef(handleMessage);
+  handleMessageRef.current = handleMessage;
+
+  // Set up message handler that uses the ref (so it's always current)
+  // This effect re-runs when mode changes (which happens after socket is created)
   useEffect(() => {
     if (socketRef.current) {
       const socket = socketRef.current;
       const handler = (event: MessageEvent) => {
         try {
           const data = JSON.parse(event.data) as MultiplayerMessage;
-          handleMessage(data);
+          handleMessageRef.current(data);
         } catch (e) {
           console.error('Failed to parse message:', e);
         }
       };
-      
+
       socket.addEventListener('message', handler);
       return () => socket.removeEventListener('message', handler);
     }
-  }, [handleMessage]);
+  }, [mode]); // Re-run when mode changes (after connect)
 
   return (
     <div className="w-full max-w-md mx-auto">

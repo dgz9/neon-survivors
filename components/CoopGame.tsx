@@ -81,7 +81,9 @@ export default function CoopGame({
   const lastWaveRef = useRef<number>(1);
   const lastHealthRef = useRef<number>(100);
   const lastSyncRef = useRef<number>(0);
+  const lastInputSendRef = useRef<number>(0);
   const SYNC_INTERVAL = 50; // ms between state syncs
+  const INPUT_SEND_INTERVAL = 50; // ms between input sends (same as sync)
 
   // Find my player info
   const myPlayer = players.find(p => p.id === socket.id);
@@ -229,17 +231,70 @@ export default function CoopGame({
     }
   }, [initGame]);
 
+  // Store pending game state for when gameStateRef is not yet initialized
+  const pendingGameStateRef = useRef<{
+    player: Player;
+    player2: Player;
+    score: number;
+    wave: number;
+    multiplier: number;
+    enemies: unknown[];
+    projectiles: unknown[];
+    powerups: unknown[];
+    experienceOrbs: unknown[];
+    particles: unknown[];
+    isGameOver: boolean;
+    isRunning: boolean;
+  } | null>(null);
+
+  // Process pending game state once gameStateRef is ready
+  useEffect(() => {
+    if (!isHost && gameStateRef.current && pendingGameStateRef.current) {
+      const receivedState = pendingGameStateRef.current;
+      console.log('[GUEST] Processing pending game state');
+
+      gameStateRef.current.player = receivedState.player;
+      gameStateRef.current.player.image = p1ImageRef.current;
+      gameStateRef.current.score = receivedState.score;
+      gameStateRef.current.wave = receivedState.wave;
+      gameStateRef.current.multiplier = receivedState.multiplier || 1;
+      gameStateRef.current.enemies = receivedState.enemies as typeof gameStateRef.current.enemies;
+      gameStateRef.current.projectiles = receivedState.projectiles as typeof gameStateRef.current.projectiles;
+      gameStateRef.current.powerups = receivedState.powerups as typeof gameStateRef.current.powerups;
+      gameStateRef.current.experienceOrbs = receivedState.experienceOrbs as typeof gameStateRef.current.experienceOrbs;
+      gameStateRef.current.particles = receivedState.particles as typeof gameStateRef.current.particles;
+      gameStateRef.current.isGameOver = receivedState.isGameOver;
+      gameStateRef.current.isRunning = receivedState.isRunning;
+      player2Ref.current = receivedState.player2;
+      if (player2Ref.current) {
+        player2Ref.current.image = p2ImageRef.current;
+      }
+
+      setDisplayState({
+        score: receivedState.score,
+        wave: receivedState.wave,
+        health: receivedState.player.health,
+        maxHealth: receivedState.player.maxHealth,
+        health2: receivedState.player2?.health || 0,
+        maxHealth2: receivedState.player2?.maxHealth || 100,
+        level: receivedState.player.level,
+      });
+
+      pendingGameStateRef.current = null;
+    }
+  }, [isLoading, isHost]);
+
   // Handle multiplayer messages
   useEffect(() => {
     const handleMessage = (event: MessageEvent) => {
       try {
         const data = JSON.parse(event.data) as MultiplayerMessage;
-        
+
         // Debug: log all incoming messages
         if (!isHost) {
           console.log('[GUEST] Received message type:', data.type);
         }
-        
+
         if (data.type === 'player-input' && isHost) {
           // Host receives guest input
           console.log('[HOST] Received guest input:', data.keys);
@@ -263,21 +318,21 @@ export default function CoopGame({
             isGameOver: boolean;
             isRunning: boolean;
           };
-          
+
           console.log('[GUEST] Received game state:', {
             p1Pos: receivedState.player?.position,
             p2Pos: receivedState.player2?.position,
             enemies: receivedState.enemies?.length,
             isRunning: receivedState.isRunning,
+            gameStateReady: !!gameStateRef.current,
           });
-          
+
           if (gameStateRef.current) {
             // Update local state with received data, preserving local fields
             gameStateRef.current.player = receivedState.player;
             // Restore cached P1 image (can't serialize HTMLImageElement)
             gameStateRef.current.player.image = p1ImageRef.current;
-            console.log('[GUEST] P1 image restored:', !!p1ImageRef.current);
-            
+
             gameStateRef.current.score = receivedState.score;
             gameStateRef.current.wave = receivedState.wave;
             gameStateRef.current.multiplier = receivedState.multiplier || 1;
@@ -292,9 +347,8 @@ export default function CoopGame({
             // Restore cached P2 image
             if (player2Ref.current) {
               player2Ref.current.image = p2ImageRef.current;
-              console.log('[GUEST] P2 image restored:', !!p2ImageRef.current);
             }
-            
+
             // Update display state for guest
             setDisplayState({
               score: receivedState.score,
@@ -305,6 +359,10 @@ export default function CoopGame({
               maxHealth2: receivedState.player2?.maxHealth || 100,
               level: receivedState.player.level,
             });
+          } else {
+            // Store for later processing when gameStateRef is ready
+            console.log('[GUEST] Storing pending game state (waiting for init)');
+            pendingGameStateRef.current = receivedState;
           }
         }
       } catch (e) {
@@ -381,8 +439,9 @@ export default function CoopGame({
       const deltaTime = Math.min((timestamp - lastTimeRef.current) / 16.67, 3);
       lastTimeRef.current = timestamp;
 
-      // Guest: send input to host
-      if (!isHost) {
+      // Guest: send input to host (throttled)
+      if (!isHost && timestamp - lastInputSendRef.current > INPUT_SEND_INTERVAL) {
+        lastInputSendRef.current = timestamp;
         const keys = Array.from(inputRef.current.keys);
         if (keys.length > 0) {
           console.log('[GUEST] Sending input:', keys);
