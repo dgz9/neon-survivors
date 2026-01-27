@@ -290,14 +290,8 @@ export default function CoopGame({
       try {
         const data = JSON.parse(event.data) as MultiplayerMessage;
 
-        // Debug: log all incoming messages
-        if (!isHost) {
-          console.log('[GUEST] Received message type:', data.type);
-        }
-
         if (data.type === 'player-input' && isHost) {
           // Host receives guest input
-          console.log('[HOST] Received guest input:', data.keys);
           remoteInputRef.current = {
             keys: data.keys,
             mousePos: data.mousePos,
@@ -319,20 +313,29 @@ export default function CoopGame({
             isRunning: boolean;
           };
 
-          console.log('[GUEST] Received game state:', {
-            p1Pos: receivedState.player?.position,
-            p2Pos: receivedState.player2?.position,
-            enemies: receivedState.enemies?.length,
-            isRunning: receivedState.isRunning,
-            gameStateReady: !!gameStateRef.current,
-          });
+          // Handle game over immediately when received from host
+          if (receivedState.isGameOver) {
+            const teamNames = players.map(p => p.name);
+            onGameOver(
+              receivedState.score,
+              receivedState.wave,
+              (receivedState.player?.kills || 0) + (receivedState.player2?.kills || 0),
+              {
+                totalDamageDealt: 0,
+                totalDamageTaken: 0,
+                survivalTime: Date.now() - (gameStateRef.current?.startTime || Date.now()),
+                peakMultiplier: receivedState.multiplier || 1,
+                weaponLevels: receivedState.player?.weapons?.map((w: { type: string; level: number }) => ({ type: w.type, level: w.level })) || [],
+                teamNames,
+              }
+            );
+            return;
+          }
 
           if (gameStateRef.current) {
-            // Update local state with received data, preserving local fields
+            // Update local state with received data
             gameStateRef.current.player = receivedState.player;
-            // Restore cached P1 image (can't serialize HTMLImageElement)
             gameStateRef.current.player.image = p1ImageRef.current;
-
             gameStateRef.current.score = receivedState.score;
             gameStateRef.current.wave = receivedState.wave;
             gameStateRef.current.multiplier = receivedState.multiplier || 1;
@@ -344,7 +347,6 @@ export default function CoopGame({
             gameStateRef.current.isGameOver = receivedState.isGameOver;
             gameStateRef.current.isRunning = receivedState.isRunning;
             player2Ref.current = receivedState.player2;
-            // Restore cached P2 image
             if (player2Ref.current) {
               player2Ref.current.image = p2ImageRef.current;
             }
@@ -361,7 +363,6 @@ export default function CoopGame({
             });
           } else {
             // Store for later processing when gameStateRef is ready
-            console.log('[GUEST] Storing pending game state (waiting for init)');
             pendingGameStateRef.current = receivedState;
           }
         }
@@ -372,7 +373,7 @@ export default function CoopGame({
 
     socket.addEventListener('message', handleMessage);
     return () => socket.removeEventListener('message', handleMessage);
-  }, [socket, isHost]);
+  }, [socket, isHost, onGameOver, players]);
 
   // Handle input
   useEffect(() => {
@@ -443,9 +444,6 @@ export default function CoopGame({
       if (!isHost && timestamp - lastInputSendRef.current > INPUT_SEND_INTERVAL) {
         lastInputSendRef.current = timestamp;
         const keys = Array.from(inputRef.current.keys);
-        if (keys.length > 0) {
-          console.log('[GUEST] Sending input:', keys);
-        }
         sendInput(socket, keys, inputRef.current.mousePos);
       }
 
@@ -477,7 +475,6 @@ export default function CoopGame({
             const len = Math.sqrt(dx * dx + dy * dy);
             dx /= len;
             dy /= len;
-            console.log('[HOST] Moving P2:', { dx, dy, keys: remoteInput.keys });
           }
           
           p2.velocity.x = dx * p2.speed;
@@ -569,7 +566,8 @@ export default function CoopGame({
         // Sync state to guest
         if (timestamp - lastSyncRef.current > SYNC_INTERVAL) {
           lastSyncRef.current = timestamp;
-          console.log('[HOST] Sending game state to guest, enemies:', gameStateRef.current.enemies.length);
+          // Limit particles sent to reduce bandwidth (keep only recent/important ones)
+          const limitedParticles = gameStateRef.current.particles.slice(-50);
           sendGameState(socket, {
             player: gameStateRef.current.player,
             player2: player2Ref.current,
@@ -580,7 +578,7 @@ export default function CoopGame({
             projectiles: gameStateRef.current.projectiles,
             powerups: gameStateRef.current.powerups,
             experienceOrbs: gameStateRef.current.experienceOrbs,
-            particles: gameStateRef.current.particles,
+            particles: limitedParticles,
             isGameOver: gameStateRef.current.isGameOver,
             isRunning: gameStateRef.current.isRunning,
           });

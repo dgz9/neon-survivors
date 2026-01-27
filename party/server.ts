@@ -102,8 +102,6 @@ export default class NeonSurvivorsParty implements Party.Server {
           
         case "game-state":
           // Broadcast game state to all OTHER connections
-          const otherConns = Array.from(this.connections.keys()).filter(id => id !== sender.id);
-          console.log(`[SERVER] Relaying game-state from ${sender.id} to connections: [${otherConns.join(', ')}]`);
           this.broadcastToOthers(message, sender.id);
           break;
           
