@@ -50,7 +50,7 @@ export default class NeonSurvivorsParty implements Party.Server {
   constructor(readonly room: Party.Room) {}
 
   onConnect(conn: Party.Connection, ctx: Party.ConnectionContext) {
-    console.log(`[SERVER] Connection ${conn.id} joined room ${this.room.id}`);
+    console.log(`[SERVER] Connection ${conn.id} joined room ${this.room.id}, total connections: ${this.connections.size + 1}`);
     // Store connection, but don't add as player until they send player-join
     this.connections.set(conn.id, conn);
   }
@@ -102,7 +102,8 @@ export default class NeonSurvivorsParty implements Party.Server {
           
         case "game-state":
           // Broadcast game state to all OTHER connections
-          console.log(`[SERVER] Relaying game-state from ${sender.id} to ${this.connections.size - 1} other connections`);
+          const otherConns = Array.from(this.connections.keys()).filter(id => id !== sender.id);
+          console.log(`[SERVER] Relaying game-state from ${sender.id} to connections: [${otherConns.join(', ')}]`);
           this.broadcastToOthers(message, sender.id);
           break;
           

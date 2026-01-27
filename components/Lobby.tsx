@@ -108,12 +108,8 @@ export default function Lobby({
     }
   }, [isHost, players, selectedArena, onStartGame]);
 
-  // Cleanup on unmount
-  useEffect(() => {
-    return () => {
-      socketRef.current?.close();
-    };
-  }, []);
+  // NOTE: Do NOT close socket on unmount - it's passed to CoopGame
+  // Socket is only closed when explicitly leaving the room (see Leave Room button)
 
   // Update message handler when dependencies change
   useEffect(() => {
