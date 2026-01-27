@@ -33,6 +33,9 @@ export function generateRoomCode(): string {
   return code;
 }
 
+// Store player info for reconnection
+let storedPlayerInfo: { name: string; imageUrl: string } | null = null;
+
 export function createPartySocket(
   roomCode: string,
   onMessage: (msg: MultiplayerMessage) => void,
@@ -54,9 +57,25 @@ export function createPartySocket(
     }
   });
 
-  if (onOpen) {
-    socket.addEventListener("open", onOpen);
-  }
+  // Handle EVERY open event (including reconnections)
+  socket.addEventListener("open", () => {
+    console.log('[SOCKET] Connection opened/reconnected, id:', socket.id);
+    
+    // Re-send player-join on reconnection if we have stored info
+    if (storedPlayerInfo) {
+      console.log('[SOCKET] Re-sending player-join after reconnection');
+      socket.send(JSON.stringify({
+        type: "player-join",
+        id: socket.id,
+        name: storedPlayerInfo.name,
+        imageUrl: storedPlayerInfo.imageUrl,
+      }));
+    }
+    
+    if (onOpen) {
+      onOpen();
+    }
+  });
 
   if (onClose) {
     socket.addEventListener("close", onClose);
@@ -66,6 +85,9 @@ export function createPartySocket(
 }
 
 export function joinRoom(socket: PartySocket, name: string, imageUrl: string) {
+  // Store for reconnection
+  storedPlayerInfo = { name, imageUrl };
+  
   socket.send(JSON.stringify({
     type: "player-join",
     id: socket.id,

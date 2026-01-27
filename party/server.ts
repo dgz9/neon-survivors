@@ -8,11 +8,6 @@ interface PlayerJoin {
   imageUrl: string;
 }
 
-interface PlayerLeave {
-  type: "player-leave";
-  id: string;
-}
-
 interface PlayerInput {
   type: "player-input";
   id: string;
@@ -23,7 +18,6 @@ interface PlayerInput {
 interface GameStateSync {
   type: "game-state";
   state: unknown;
-  hostId: string;
 }
 
 interface StartGame {
@@ -37,49 +31,58 @@ interface RoomInfo {
   roomCode: string;
 }
 
-type Message = PlayerJoin | PlayerLeave | PlayerInput | GameStateSync | StartGame;
+type Message = PlayerJoin | PlayerInput | GameStateSync | StartGame;
 
 interface Player {
   id: string;
   name: string;
   imageUrl: string;
   isHost: boolean;
-  connection: Party.Connection;
 }
 
 export default class NeonSurvivorsParty implements Party.Server {
   players: Map<string, Player> = new Map();
+  // Track connections separately - connections can change, players persist
+  connections: Map<string, Party.Connection> = new Map();
   hostId: string | null = null;
   gameStarted: boolean = false;
 
   constructor(readonly room: Party.Room) {}
 
   onConnect(conn: Party.Connection, ctx: Party.ConnectionContext) {
-    console.log(`Connection ${conn.id} joined room ${this.room.id}`);
+    console.log(`[SERVER] Connection ${conn.id} joined room ${this.room.id}`);
+    // Store connection, but don't add as player until they send player-join
+    this.connections.set(conn.id, conn);
   }
 
   onClose(conn: Party.Connection) {
-    const player = this.players.get(conn.id);
-    if (player) {
-      this.players.delete(conn.id);
-      
-      // If host left, assign new host
-      if (this.hostId === conn.id && this.players.size > 0) {
-        const playersArray = Array.from(this.players.values());
-        const newHost = playersArray[0];
-        if (newHost) {
-          newHost.isHost = true;
-          this.hostId = newHost.id;
+    console.log(`[SERVER] Connection ${conn.id} closed, gameStarted=${this.gameStarted}`);
+    this.connections.delete(conn.id);
+    
+    // Only remove player from game if NOT started (lobby phase)
+    // During game, we keep player info but mark them as disconnected
+    if (!this.gameStarted) {
+      const player = this.players.get(conn.id);
+      if (player) {
+        this.players.delete(conn.id);
+        
+        // If host left, assign new host
+        if (this.hostId === conn.id && this.players.size > 0) {
+          const newHost = Array.from(this.players.values())[0];
+          if (newHost) {
+            newHost.isHost = true;
+            this.hostId = newHost.id;
+          }
         }
+        
+        // Notify others
+        this.broadcastToConnections({
+          type: "player-leave",
+          id: conn.id,
+        });
+        
+        this.broadcastRoomInfo();
       }
-      
-      // Notify others
-      this.broadcast({
-        type: "player-leave",
-        id: conn.id,
-      });
-      
-      this.broadcastRoomInfo();
     }
   }
 
@@ -91,82 +94,48 @@ export default class NeonSurvivorsParty implements Party.Server {
         case "player-join":
           this.handlePlayerJoin(sender, data);
           break;
+          
         case "player-input":
           // Forward inputs to host
-          if (this.hostId && this.hostId !== sender.id) {
-            // Make sure sender (guest) is in players map for broadcasts (handles reconnection)
-            if (this.gameStarted && !this.players.has(sender.id)) {
-              console.log(`[SERVER] Re-adding guest ${sender.id} to players map`);
-              this.players.set(sender.id, {
-                id: sender.id,
-                name: 'Guest',
-                imageUrl: '',
-                isHost: false,
-                connection: sender,
-              });
-            }
-            
-            const host = this.players.get(this.hostId);
-            if (host) {
-              host.connection.send(message);
-            } else {
-              console.log(`[SERVER] Warning: host ${this.hostId} not in players map`);
-            }
-          }
+          this.forwardToHost(message, sender.id);
           break;
+          
         case "game-state":
-          // Host sends game state to all other players
-          // During active game, trust game-state senders as the host (handles reconnection)
-          const gameStateMsg = data as GameStateSync;
-          
-          console.log(`[SERVER] game-state from ${sender.id}, current hostId=${this.hostId}, gameStarted=${this.gameStarted}, players=${this.players.size}`);
-          
-          // If game is started and we receive game-state, the sender is the host
-          // This handles reconnection where connection ID changes
-          if (this.gameStarted) {
-            // Update host tracking if needed
-            if (sender.id !== this.hostId) {
-              console.log(`[SERVER] Host reconnected: updating hostId from ${this.hostId} to ${sender.id}`);
-              this.hostId = sender.id;
-            }
-            
-            // Make sure sender is in players map (may have been removed on disconnect)
-            if (!this.players.has(sender.id)) {
-              console.log(`[SERVER] Re-adding host ${sender.id} to players map`);
-              this.players.set(sender.id, {
-                id: sender.id,
-                name: 'Host',
-                imageUrl: '',
-                isHost: true,
-                connection: sender,
-              });
-            }
-            
-            console.log(`[SERVER] Broadcasting game-state to ${this.players.size - 1} other players`);
-            this.broadcastExcept(message, sender.id);
-          } else {
-            console.log(`[SERVER] Ignoring game-state - game not started`);
-          }
+          // Broadcast game state to all OTHER connections
+          console.log(`[SERVER] Relaying game-state from ${sender.id} to ${this.connections.size - 1} other connections`);
+          this.broadcastToOthers(message, sender.id);
           break;
+          
         case "start-game":
+          console.log(`[SERVER] Game starting! Players: ${this.players.size}, Connections: ${this.connections.size}`);
           this.gameStarted = true;
-          this.broadcast(message);
+          this.broadcastToConnections(message);
           break;
       }
     } catch (e) {
-      console.error("Failed to parse message:", e);
+      console.error("[SERVER] Failed to parse message:", e);
     }
   }
 
   handlePlayerJoin(conn: Party.Connection, data: PlayerJoin) {
-    const isHost = this.players.size === 0;
+    // Check if this player already exists (reconnection case)
+    let existingPlayer: Player | undefined;
+    for (const [id, player] of this.players) {
+      if (player.name === data.name && player.imageUrl === data.imageUrl) {
+        existingPlayer = player;
+        // Remove old entry
+        this.players.delete(id);
+        break;
+      }
+    }
+    
+    const isHost = existingPlayer?.isHost ?? this.players.size === 0;
     
     const player: Player = {
       id: conn.id,
       name: data.name,
       imageUrl: data.imageUrl,
       isHost,
-      connection: conn,
     };
     
     if (isHost) {
@@ -174,6 +143,7 @@ export default class NeonSurvivorsParty implements Party.Server {
     }
     
     this.players.set(conn.id, player);
+    console.log(`[SERVER] Player joined: ${data.name} (${conn.id}), isHost=${isHost}, total players=${this.players.size}`);
     
     // Send room info to everyone
     this.broadcastRoomInfo();
@@ -190,22 +160,46 @@ export default class NeonSurvivorsParty implements Party.Server {
       })),
       roomCode: this.room.id,
     };
-    this.broadcast(roomInfo);
+    this.broadcastToConnections(roomInfo);
   }
 
-  broadcast(message: unknown) {
+  // Broadcast to ALL active connections
+  broadcastToConnections(message: unknown) {
     const msg = typeof message === "string" ? message : JSON.stringify(message);
-    Array.from(this.players.values()).forEach(player => {
-      player.connection.send(msg);
-    });
+    for (const conn of this.connections.values()) {
+      try {
+        conn.send(msg);
+      } catch (e) {
+        console.error(`[SERVER] Failed to send to ${conn.id}:`, e);
+      }
+    }
   }
 
-  broadcastExcept(message: string, exceptId: string) {
-    Array.from(this.players.values()).forEach(player => {
-      if (player.id !== exceptId) {
-        player.connection.send(message);
+  // Broadcast to all connections EXCEPT one
+  broadcastToOthers(message: string, exceptId: string) {
+    for (const [id, conn] of this.connections) {
+      if (id !== exceptId) {
+        try {
+          conn.send(message);
+        } catch (e) {
+          console.error(`[SERVER] Failed to send to ${id}:`, e);
+        }
       }
-    });
+    }
+  }
+
+  // Forward message to host connection
+  forwardToHost(message: string, senderId: string) {
+    if (!this.hostId || this.hostId === senderId) return;
+    
+    const hostConn = this.connections.get(this.hostId);
+    if (hostConn) {
+      try {
+        hostConn.send(message);
+      } catch (e) {
+        console.error(`[SERVER] Failed to forward to host:`, e);
+      }
+    }
   }
 }
 
