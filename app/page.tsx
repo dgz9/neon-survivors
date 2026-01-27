@@ -3,11 +3,15 @@
 import { useState, useCallback } from 'react';
 import AvatarSelector from '@/components/AvatarSelector';
 import Game from '@/components/Game';
+import CoopGame from '@/components/CoopGame';
 import GameOver from '@/components/GameOver';
 import Leaderboard from '@/components/Leaderboard';
-import { Trophy } from 'lucide-react';
+import Lobby from '@/components/Lobby';
+import { Trophy, Users, User } from 'lucide-react';
+import PartySocket from 'partysocket';
+import { MultiplayerPlayer } from '@/lib/multiplayer';
 
-type GamePhase = 'menu' | 'playing' | 'gameover';
+type GamePhase = 'menu' | 'mode-select' | 'lobby' | 'playing' | 'playing-coop' | 'gameover';
 
 export default function Home() {
   const [phase, setPhase] = useState<GamePhase>('menu');
@@ -23,15 +27,36 @@ export default function Home() {
       survivalTime: number;
       peakMultiplier: number;
       weaponLevels: { type: string; level: number }[];
+      teamNames?: string[];
     };
   }>({ score: 0, wave: 1, kills: 0 });
   const [selectedArena, setSelectedArena] = useState<'void' | 'grid' | 'cyber' | 'neon'>('grid');
   const [showLeaderboard, setShowLeaderboard] = useState(false);
+  
+  // Co-op state
+  const [coopSocket, setCoopSocket] = useState<PartySocket | null>(null);
+  const [coopPlayers, setCoopPlayers] = useState<MultiplayerPlayer[]>([]);
+  const [isCoopHost, setIsCoopHost] = useState(false);
 
-  const handleStartGame = useCallback((imageUrl: string, name: string) => {
+  const handleAvatarSelect = useCallback((imageUrl: string, name: string) => {
     setPlayerImageUrl(imageUrl);
     setPlayerName(name);
+    setPhase('mode-select');
+  }, []);
+
+  const handleSoloMode = useCallback(() => {
     setPhase('playing');
+  }, []);
+
+  const handleCoopMode = useCallback(() => {
+    setPhase('lobby');
+  }, []);
+
+  const handleCoopStart = useCallback((socket: PartySocket, players: MultiplayerPlayer[], isHost: boolean) => {
+    setCoopSocket(socket);
+    setCoopPlayers(players);
+    setIsCoopHost(isHost);
+    setPhase('playing-coop');
   }, []);
 
   const handleGameOver = useCallback((score: number, wave: number, kills: number, stats?: {
@@ -40,19 +65,38 @@ export default function Home() {
     survivalTime: number;
     peakMultiplier: number;
     weaponLevels: { type: string; level: number }[];
+    teamNames?: string[];
   }) => {
     setGameStats({ score, wave, kills, stats });
     setPhase('gameover');
-  }, []);
+    
+    // Close co-op socket if exists
+    coopSocket?.close();
+    setCoopSocket(null);
+  }, [coopSocket]);
 
   const handlePlayAgain = useCallback(() => {
-    setPhase('playing');
-  }, []);
+    if (coopPlayers.length > 0) {
+      // Was a co-op game, go back to mode select
+      setPhase('mode-select');
+    } else {
+      setPhase('playing');
+    }
+  }, [coopPlayers]);
 
   const handleBackToMenu = useCallback(() => {
     setPhase('menu');
     setPlayerImageUrl('');
-  }, []);
+    setCoopPlayers([]);
+    coopSocket?.close();
+    setCoopSocket(null);
+  }, [coopSocket]);
+
+  const handleBackToModeSelect = useCallback(() => {
+    setPhase('mode-select');
+    coopSocket?.close();
+    setCoopSocket(null);
+  }, [coopSocket]);
 
   return (
     <div className="min-h-screen bg-brutal-black text-white">
@@ -64,7 +108,7 @@ export default function Home() {
             <div className="flex items-center gap-4 mb-6 sm:mb-8">
               <div className="h-[2px] flex-1 bg-gradient-to-r from-transparent via-electric-yellow/50 to-transparent" />
               <span className="text-[10px] sm:text-xs font-mono text-electric-yellow/60 tracking-[0.3em] uppercase">
-                Survival Arena v1.0
+                Survival Arena v1.1
               </span>
               <div className="h-[2px] flex-1 bg-gradient-to-r from-transparent via-electric-yellow/50 to-transparent" />
             </div>
@@ -91,7 +135,7 @@ export default function Home() {
           </header>
 
           {/* Avatar selector */}
-          <AvatarSelector onSelect={handleStartGame} />
+          <AvatarSelector onSelect={handleAvatarSelect} />
 
           {/* Arena Selection */}
           <div className="w-full max-w-2xl mt-8">
@@ -193,6 +237,76 @@ export default function Home() {
         </div>
       )}
 
+      {/* Mode Selection */}
+      {phase === 'mode-select' && (
+        <div className="flex flex-col items-center justify-center min-h-screen p-4">
+          <div className="w-full max-w-md">
+            <div className="text-center mb-8">
+              <p className="font-mono text-sm text-white/60 mb-2">Welcome,</p>
+              <h2 className="font-display text-3xl text-electric-cyan">{playerName}</h2>
+            </div>
+
+            <div className="flex items-center gap-3 mb-6">
+              <div className="h-[1px] flex-1 bg-white/10" />
+              <span className="font-mono text-xs text-white/40 uppercase tracking-wider">Select Mode</span>
+              <div className="h-[1px] flex-1 bg-white/10" />
+            </div>
+
+            <div className="space-y-4">
+              <button
+                onClick={handleSoloMode}
+                className="w-full p-6 border-2 border-electric-cyan/50 hover:border-electric-cyan hover:bg-electric-cyan/10 transition-all group text-left"
+              >
+                <div className="flex items-center gap-4">
+                  <User className="w-8 h-8 text-electric-cyan" />
+                  <div>
+                    <div className="font-display text-2xl text-electric-cyan">SOLO</div>
+                    <p className="font-mono text-xs text-white/60">Classic survival mode</p>
+                  </div>
+                </div>
+              </button>
+
+              <button
+                onClick={handleCoopMode}
+                className="w-full p-6 border-2 border-electric-pink/50 hover:border-electric-pink hover:bg-electric-pink/10 transition-all group text-left"
+              >
+                <div className="flex items-center gap-4">
+                  <Users className="w-8 h-8 text-electric-pink" />
+                  <div>
+                    <div className="font-display text-2xl text-electric-pink">CO-OP</div>
+                    <p className="font-mono text-xs text-white/60">Team up with a friend</p>
+                  </div>
+                </div>
+                <div className="mt-3 px-2 py-1 bg-electric-green/20 border border-electric-green/30 inline-block">
+                  <span className="font-mono text-xs text-electric-green">NEW!</span>
+                </div>
+              </button>
+            </div>
+
+            <button
+              onClick={handleBackToMenu}
+              className="w-full mt-8 py-3 font-mono text-sm uppercase tracking-wider text-white/40 hover:text-white transition-colors"
+            >
+              {'<--'} Back to Menu
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Co-op Lobby */}
+      {phase === 'lobby' && (
+        <div className="flex flex-col items-center justify-center min-h-screen p-4">
+          <Lobby
+            playerName={playerName}
+            playerImageUrl={playerImageUrl}
+            selectedArena={selectedArena}
+            onStartGame={handleCoopStart}
+            onBack={handleBackToModeSelect}
+          />
+        </div>
+      )}
+
+      {/* Solo Game */}
       {phase === 'playing' && (
         <Game
           playerImageUrl={playerImageUrl}
@@ -203,12 +317,25 @@ export default function Home() {
         />
       )}
 
+      {/* Co-op Game */}
+      {phase === 'playing-coop' && coopSocket && (
+        <CoopGame
+          socket={coopSocket}
+          players={coopPlayers}
+          isHost={isCoopHost}
+          arena={selectedArena}
+          onGameOver={handleGameOver}
+          onBack={handleBackToMenu}
+        />
+      )}
+
+      {/* Game Over */}
       {phase === 'gameover' && (
         <GameOver
           score={gameStats.score}
           wave={gameStats.wave}
           kills={gameStats.kills}
-          playerName={playerName}
+          playerName={gameStats.stats?.teamNames ? gameStats.stats.teamNames.join(' & ') : playerName}
           onPlayAgain={handlePlayAgain}
           onBackToMenu={handleBackToMenu}
           stats={gameStats.stats}
