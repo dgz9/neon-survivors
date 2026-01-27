@@ -50,6 +50,9 @@ export default function CoopGame({
   const player2Ref = useRef<Player | null>(null);
   const animationFrameRef = useRef<number>(0);
   const lastTimeRef = useRef<number>(0);
+  // Cache loaded images (can't serialize HTMLImageElement over network)
+  const p1ImageRef = useRef<HTMLImageElement | null>(null);
+  const p2ImageRef = useRef<HTMLImageElement | null>(null);
   const inputRef = useRef<{ keys: Set<string>; mousePos: Vector2; mouseDown: boolean }>({
     keys: new Set(),
     mousePos: { x: 0, y: 0 },
@@ -104,16 +107,36 @@ export default function CoopGame({
   // Initialize game (host creates full state, guest creates placeholder)
   const initGame = useCallback(async () => {
     if (!isHost) {
-      // Guest: create a minimal state that can be rendered while waiting for sync
+      // Guest: create a minimal state and load BOTH player images
       let state = createInitialGameState(
-        myPlayer?.imageUrl || '',
+        otherPlayer?.imageUrl || '', // Use host's (P1) image for main player display
         dimensions.width,
         dimensions.height,
         DEFAULT_CONFIG
       );
       state = { ...state, arena };
       state = await loadPlayerImage(state);
-      state.player.color = PLAYER_COLORS[1]; // Guest is P2 (pink)
+      state.player.color = PLAYER_COLORS[0]; // P1 is cyan
+      p1ImageRef.current = state.player.image; // Cache P1 image
+      
+      // Also load P2 (guest's own) image
+      if (myPlayer?.imageUrl) {
+        const img = new Image();
+        img.crossOrigin = 'anonymous';
+        try {
+          await new Promise<void>((resolve, reject) => {
+            img.onload = () => {
+              p2ImageRef.current = img;
+              resolve();
+            };
+            img.onerror = reject;
+            img.src = myPlayer.imageUrl;
+          });
+        } catch (e) {
+          console.error('Failed to load P2 image on guest');
+        }
+      }
+      
       state = startGame(state); // Start the game so isRunning is true
       gameStateRef.current = state;
       setIsLoading(false);
@@ -132,6 +155,7 @@ export default function CoopGame({
     state = { ...state, arena };
     state = await loadPlayerImage(state);
     state.player.color = PLAYER_COLORS[0];
+    p1ImageRef.current = state.player.image; // Cache P1 image
     
     // Create player 2 (guest)
     const p2: Player = {
@@ -173,6 +197,7 @@ export default function CoopGame({
         await new Promise<void>((resolve, reject) => {
           img.onload = () => {
             p2.image = img;
+            p2ImageRef.current = img; // Cache P2 image
             resolve();
           };
           img.onerror = reject;
@@ -204,6 +229,7 @@ export default function CoopGame({
         
         if (data.type === 'player-input' && isHost) {
           // Host receives guest input
+          console.log('[HOST] Received guest input:', data.keys);
           remoteInputRef.current = {
             keys: data.keys,
             mousePos: data.mousePos,
@@ -228,6 +254,9 @@ export default function CoopGame({
           if (gameStateRef.current) {
             // Update local state with received data, preserving local fields
             gameStateRef.current.player = receivedState.player;
+            // Restore cached P1 image (can't serialize HTMLImageElement)
+            gameStateRef.current.player.image = p1ImageRef.current;
+            
             gameStateRef.current.score = receivedState.score;
             gameStateRef.current.wave = receivedState.wave;
             gameStateRef.current.multiplier = receivedState.multiplier || 1;
@@ -239,6 +268,10 @@ export default function CoopGame({
             gameStateRef.current.isGameOver = receivedState.isGameOver;
             gameStateRef.current.isRunning = receivedState.isRunning;
             player2Ref.current = receivedState.player2;
+            // Restore cached P2 image
+            if (player2Ref.current) {
+              player2Ref.current.image = p2ImageRef.current;
+            }
             
             // Update display state for guest
             setDisplayState({
@@ -328,7 +361,11 @@ export default function CoopGame({
 
       // Guest: send input to host
       if (!isHost) {
-        sendInput(socket, Array.from(inputRef.current.keys), inputRef.current.mousePos);
+        const keys = Array.from(inputRef.current.keys);
+        if (keys.length > 0) {
+          console.log('[GUEST] Sending input:', keys);
+        }
+        sendInput(socket, keys, inputRef.current.mousePos);
       }
 
       // Host: update game state
@@ -359,6 +396,7 @@ export default function CoopGame({
             const len = Math.sqrt(dx * dx + dy * dy);
             dx /= len;
             dy /= len;
+            console.log('[HOST] Moving P2:', { dx, dy, keys: remoteInput.keys });
           }
           
           p2.velocity.x = dx * p2.speed;
