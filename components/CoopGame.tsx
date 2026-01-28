@@ -36,6 +36,59 @@ interface CoopGameProps {
 // Colors for player 2
 const PLAYER_COLORS = ['#00f0ff', '#ff2d6a']; // cyan for P1, pink for P2
 
+// Helper to apply upgrade to player 2 (mirrors applyUpgrade logic)
+function applyUpgradeToPlayer2(player: Player, upgrade: Upgrade): Player {
+  if (upgrade.type === 'weapon_new' && upgrade.weaponType) {
+    return {
+      ...player,
+      weapons: [
+        ...player.weapons,
+        {
+          type: upgrade.weaponType,
+          level: 1,
+          lastFired: 0,
+          damage: 10,
+          fireRate: 200,
+          projectileSpeed: 12,
+          projectileCount: upgrade.weaponType === 'spread' ? 5 : 1,
+          piercing: upgrade.weaponType === 'laser' ? 3 : 0,
+        },
+      ],
+    };
+  } else if (upgrade.type === 'weapon_upgrade' && upgrade.weaponType) {
+    return {
+      ...player,
+      weapons: player.weapons.map(w => {
+        if (w.type === upgrade.weaponType) {
+          return {
+            ...w,
+            level: w.level + 1,
+            damage: w.damage * 1.2,
+            fireRate: Math.max(50, w.fireRate * 0.9),
+            projectileCount: w.type === 'spread' ? w.projectileCount + 1 : w.projectileCount,
+            piercing: w.type === 'laser' ? (w.piercing || 0) + 1 : w.piercing,
+          };
+        }
+        return w;
+      }),
+    };
+  } else if (upgrade.type === 'stat') {
+    switch (upgrade.stat) {
+      case 'health':
+        return {
+          ...player,
+          maxHealth: player.maxHealth + 25,
+          health: Math.min(player.health + 25, player.maxHealth + 25),
+        };
+      case 'speed':
+        return { ...player, speedBonus: (player.speedBonus || 0) + 0.5 };
+      case 'magnet':
+        return { ...player, magnetBonus: (player.magnetBonus || 0) + 0.3 };
+    }
+  }
+  return player;
+}
+
 export default function CoopGame({
   socket,
   players,
@@ -61,6 +114,16 @@ export default function CoopGame({
   const remoteInputRef = useRef<{ keys: string[]; mousePos: Vector2 }>({
     keys: [],
     mousePos: { x: 0, y: 0 },
+  });
+  // Target state for interpolation (guest only) - stores positions to lerp towards
+  const targetStateRef = useRef<{
+    playerPos: Vector2 | null;
+    player2Pos: Vector2 | null;
+    enemyPositions: Map<string, Vector2>;
+  }>({
+    playerPos: null,
+    player2Pos: null,
+    enemyPositions: new Map(),
   });
 
   const [isLoading, setIsLoading] = useState(true);
@@ -319,6 +382,10 @@ export default function CoopGame({
 
           // Handle game over immediately when received from host
           if (receivedState.isGameOver) {
+            // Set local state so game loop also exits
+            if (gameStateRef.current) {
+              gameStateRef.current.isGameOver = true;
+            }
             const teamNames = players.map(p => p.name);
             onGameOver(
               receivedState.score,
@@ -337,22 +404,56 @@ export default function CoopGame({
           }
 
           if (gameStateRef.current) {
-            // Update local state with received data
+            // Store target positions for interpolation (smooth movement)
+            targetStateRef.current.playerPos = { ...receivedState.player.position };
+            targetStateRef.current.player2Pos = receivedState.player2 ? { ...receivedState.player2.position } : null;
+
+            // Store enemy target positions
+            targetStateRef.current.enemyPositions.clear();
+            for (const enemy of receivedState.enemies as typeof gameStateRef.current.enemies) {
+              targetStateRef.current.enemyPositions.set(enemy.id, { ...enemy.position });
+            }
+
+            // Update player non-position data
+            const currentPlayerPos = gameStateRef.current.player.position;
             gameStateRef.current.player = receivedState.player;
+            gameStateRef.current.player.position = currentPlayerPos; // Keep current position for lerping
             gameStateRef.current.player.image = p1ImageRef.current;
+
+            // Update non-position game state
             gameStateRef.current.score = receivedState.score;
             gameStateRef.current.wave = receivedState.wave;
             gameStateRef.current.multiplier = receivedState.multiplier || 1;
-            gameStateRef.current.enemies = receivedState.enemies as typeof gameStateRef.current.enemies;
+
+            // For enemies: keep existing positions for lerping, but update other data
+            const existingEnemyPositions = new Map(
+              gameStateRef.current.enemies.map(e => [e.id, { ...e.position }])
+            );
+            gameStateRef.current.enemies = (receivedState.enemies as typeof gameStateRef.current.enemies).map(e => {
+              const existingPos = existingEnemyPositions.get(e.id);
+              return {
+                ...e,
+                position: existingPos || e.position, // Use existing position if we have it
+              };
+            });
+
             gameStateRef.current.projectiles = receivedState.projectiles as typeof gameStateRef.current.projectiles;
             gameStateRef.current.powerups = receivedState.powerups as typeof gameStateRef.current.powerups;
             gameStateRef.current.experienceOrbs = receivedState.experienceOrbs as typeof gameStateRef.current.experienceOrbs;
-            gameStateRef.current.particles = receivedState.particles as typeof gameStateRef.current.particles;
+            // Don't sync particles - guest generates own effects
             gameStateRef.current.isGameOver = receivedState.isGameOver;
             gameStateRef.current.isRunning = receivedState.isRunning;
-            player2Ref.current = receivedState.player2;
-            if (player2Ref.current) {
+
+            // Update player2 with position preservation
+            if (receivedState.player2) {
+              const currentP2Pos = player2Ref.current?.position;
+              player2Ref.current = receivedState.player2;
+              if (currentP2Pos) {
+                player2Ref.current.position = currentP2Pos;
+              }
               player2Ref.current.image = p2ImageRef.current;
+            } else {
+              player2Ref.current = receivedState.player2;
             }
 
             // Update display state for guest
@@ -388,14 +489,8 @@ export default function CoopGame({
 
         // Handle upgrades-complete from host (both receive)
         if (data.type === 'upgrades-complete') {
-          // Apply the upgrade and close the menu
-          if (gameStateRef.current) {
-            const upgrade = availableUpgrades.find(u => u.id === data.upgradeId);
-            if (upgrade) {
-              gameStateRef.current = applyUpgrade(gameStateRef.current, upgrade);
-            }
-          }
-          // Reset upgrade state
+          // Guest: don't apply upgrade locally - host state will be synced
+          // Just close the upgrade menu
           setShowUpgrades(false);
           setAvailableUpgrades([]);
           setMyUpgradeChoice(null);
@@ -450,7 +545,7 @@ export default function CoopGame({
     };
   }, []);
 
-  // Handle upgrade selection (co-op synchronized)
+  // Handle upgrade selection (co-op - each player picks their own upgrade)
   const handleUpgrade = useCallback((upgrade: Upgrade) => {
     // Store my choice locally
     setMyUpgradeChoice(upgrade.id);
@@ -460,19 +555,27 @@ export default function CoopGame({
       type: 'upgrade-selected',
       playerId: socket.id,
       upgradeId: upgrade.id,
+      isHost: isHost,
     }));
 
     // Check if other player has already chosen
     if (otherUpgradeChoice) {
-      // Both have chosen - host sends final upgrade
+      // Both have chosen - host applies upgrades
       if (isHost && gameStateRef.current) {
-        // Host's choice wins (or could randomize)
+        // Host's choice applies to P1 (host)
         gameStateRef.current = applyUpgrade(gameStateRef.current, upgrade);
 
-        // Send upgrades-complete to all
+        // Guest's choice (otherUpgradeChoice) applies to P2
+        const p2Upgrade = availableUpgrades.find(u => u.id === otherUpgradeChoice);
+        if (player2Ref.current && p2Upgrade) {
+          player2Ref.current = applyUpgradeToPlayer2(player2Ref.current, p2Upgrade);
+        }
+
+        // Send upgrades-complete with both choices
         socket.send(JSON.stringify({
           type: 'upgrades-complete',
-          upgradeId: upgrade.id,
+          p1UpgradeId: upgrade.id,
+          p2UpgradeId: otherUpgradeChoice,
         }));
 
         // Check for more pending level ups
@@ -499,40 +602,49 @@ export default function CoopGame({
       // Still waiting for other player
       setWaitingForOther(true);
     }
-  }, [socket, isHost, otherUpgradeChoice]);
+  }, [socket, isHost, otherUpgradeChoice, availableUpgrades]);
 
   // Handle when other player's choice arrives after I've already chosen (host only)
   useEffect(() => {
     if (isHost && myUpgradeChoice && otherUpgradeChoice && waitingForOther && gameStateRef.current) {
-      // Both have chosen - apply host's upgrade and send complete
-      const upgrade = availableUpgrades.find(u => u.id === myUpgradeChoice);
-      if (upgrade) {
-        gameStateRef.current = applyUpgrade(gameStateRef.current, upgrade);
+      // Both have chosen - apply each player's own upgrade
+      const p1Upgrade = availableUpgrades.find(u => u.id === myUpgradeChoice);
+      const p2Upgrade = availableUpgrades.find(u => u.id === otherUpgradeChoice);
 
-        // Send upgrades-complete to all
+      if (p1Upgrade) {
+        // Host's choice applies to P1
+        gameStateRef.current = applyUpgrade(gameStateRef.current, p1Upgrade);
+      }
+
+      if (player2Ref.current && p2Upgrade) {
+        // Guest's choice applies to P2
+        player2Ref.current = applyUpgradeToPlayer2(player2Ref.current, p2Upgrade);
+      }
+
+      // Send upgrades-complete with both choices
+      socket.send(JSON.stringify({
+        type: 'upgrades-complete',
+        p1UpgradeId: myUpgradeChoice,
+        p2UpgradeId: otherUpgradeChoice,
+      }));
+
+      // Check for more pending level ups
+      if (gameStateRef.current.pendingLevelUps > 0) {
         socket.send(JSON.stringify({
-          type: 'upgrades-complete',
-          upgradeId: myUpgradeChoice,
+          type: 'level-up',
+          availableUpgrades: gameStateRef.current.availableUpgrades,
+          level: gameStateRef.current.player.level,
         }));
-
-        // Check for more pending level ups
-        if (gameStateRef.current.pendingLevelUps > 0) {
-          socket.send(JSON.stringify({
-            type: 'level-up',
-            availableUpgrades: gameStateRef.current.availableUpgrades,
-            level: gameStateRef.current.player.level,
-          }));
-          setAvailableUpgrades(gameStateRef.current.availableUpgrades);
-          setMyUpgradeChoice(null);
-          setOtherUpgradeChoice(null);
-          setWaitingForOther(false);
-        } else {
-          setShowUpgrades(false);
-          setAvailableUpgrades([]);
-          setMyUpgradeChoice(null);
-          setOtherUpgradeChoice(null);
-          setWaitingForOther(false);
-        }
+        setAvailableUpgrades(gameStateRef.current.availableUpgrades);
+        setMyUpgradeChoice(null);
+        setOtherUpgradeChoice(null);
+        setWaitingForOther(false);
+      } else {
+        setShowUpgrades(false);
+        setAvailableUpgrades([]);
+        setMyUpgradeChoice(null);
+        setOtherUpgradeChoice(null);
+        setWaitingForOther(false);
       }
     }
   }, [isHost, myUpgradeChoice, otherUpgradeChoice, waitingForOther, availableUpgrades, socket]);
@@ -556,16 +668,45 @@ export default function CoopGame({
         sendInput(socket, keys, inputRef.current.mousePos);
       }
 
+      // Guest: interpolate positions for smooth movement
+      if (!isHost && gameStateRef.current && gameStateRef.current.isRunning) {
+        const lerpFactor = 0.25; // Adjust: lower = smoother but laggier, higher = snappier
+
+        // Lerp player position
+        if (targetStateRef.current.playerPos && gameStateRef.current.player) {
+          const target = targetStateRef.current.playerPos;
+          gameStateRef.current.player.position.x += (target.x - gameStateRef.current.player.position.x) * lerpFactor;
+          gameStateRef.current.player.position.y += (target.y - gameStateRef.current.player.position.y) * lerpFactor;
+        }
+
+        // Lerp player2 position
+        if (targetStateRef.current.player2Pos && player2Ref.current) {
+          const target = targetStateRef.current.player2Pos;
+          player2Ref.current.position.x += (target.x - player2Ref.current.position.x) * lerpFactor;
+          player2Ref.current.position.y += (target.y - player2Ref.current.position.y) * lerpFactor;
+        }
+
+        // Lerp enemy positions
+        for (const enemy of gameStateRef.current.enemies) {
+          const targetPos = targetStateRef.current.enemyPositions.get(enemy.id);
+          if (targetPos) {
+            enemy.position.x += (targetPos.x - enemy.position.x) * lerpFactor;
+            enemy.position.y += (targetPos.y - enemy.position.y) * lerpFactor;
+          }
+        }
+      }
+
       // Host: update game state
       if (isHost && gameStateRef.current && !isPaused && !showUpgrades && gameStateRef.current.isRunning) {
-        // Update player 1 (host)
+        // Update player 1 (host) - pass player2 so enemies target closest player
         gameStateRef.current = updateGameState(
           gameStateRef.current,
           deltaTime,
           dimensions.width,
           dimensions.height,
           inputRef.current,
-          DEFAULT_CONFIG
+          DEFAULT_CONFIG,
+          player2Ref.current
         );
 
         // Update player 2 (guest) with remote input
@@ -677,14 +818,17 @@ export default function CoopGame({
           lastSyncRef.current = timestamp;
 
           // Prune data to reduce bandwidth
-          // Enemies: only essential fields (type lets guest derive color, etc.)
+          // Enemies: essential fields for rendering and gameplay
           const prunedEnemies = gameStateRef.current.enemies.map(e => ({
             id: e.id,
             position: e.position,
             health: e.health,
+            maxHealth: e.maxHealth,
             type: e.type,
             radius: e.radius,
             damage: e.damage,
+            color: e.color,
+            ghostAlpha: e.ghostAlpha,
           }));
 
           // Projectiles: drop hitEnemies Set entirely
@@ -733,8 +877,8 @@ export default function CoopGame({
             kills: player2Ref.current.kills,
           } : null;
 
-          // Limit particles sent to reduce bandwidth (keep only recent/important ones)
-          const limitedParticles = gameStateRef.current.particles.slice(-30);
+          // Don't sync particles - guest generates own visual effects locally
+          // This significantly reduces bandwidth and lag
 
           sendGameState(socket, {
             player: prunedPlayer,
@@ -746,7 +890,6 @@ export default function CoopGame({
             projectiles: prunedProjectiles,
             powerups: gameStateRef.current.powerups,
             experienceOrbs: prunedOrbs,
-            particles: limitedParticles,
             isGameOver: gameStateRef.current.isGameOver,
             isRunning: gameStateRef.current.isRunning,
           });
@@ -1000,6 +1143,10 @@ export default function CoopGame({
                 Level {displayState?.level || 1} — Choose an upgrade
               </p>
 
+              <p className="font-mono text-xs text-white/40 mb-4">
+                Each player picks their own upgrade!
+              </p>
+
               {/* Waiting indicator */}
               {waitingForOther && (
                 <div className="mb-6 p-3 bg-electric-yellow/20 border border-electric-yellow/40">
@@ -1009,11 +1156,11 @@ export default function CoopGame({
                 </div>
               )}
 
-              {/* Show what other player chose if they chose first */}
-              {otherUpgradeChoice && !myUpgradeChoice && (
+              {/* Show what other player chose */}
+              {otherUpgradeChoice && (
                 <div className="mb-4 p-2 bg-electric-pink/20 border border-electric-pink/40">
                   <p className="font-mono text-xs text-electric-pink">
-                    Teammate has made their choice!
+                    {otherPlayer?.name || 'Teammate'} picked: {availableUpgrades.find(u => u.id === otherUpgradeChoice)?.name || 'Unknown'}
                   </p>
                 </div>
               )}
@@ -1021,6 +1168,7 @@ export default function CoopGame({
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 {availableUpgrades.map((upgrade) => {
                   const isMyChoice = myUpgradeChoice === upgrade.id;
+                  const isTeammateChoice = otherUpgradeChoice === upgrade.id;
                   return (
                     <button
                       key={upgrade.id}
@@ -1030,14 +1178,23 @@ export default function CoopGame({
                         myUpgradeChoice
                           ? isMyChoice
                             ? 'border-electric-cyan scale-105'
-                            : 'border-white/10 opacity-50'
+                            : isTeammateChoice
+                              ? 'border-electric-pink'
+                              : 'border-white/10 opacity-50'
                           : 'border-white/20 hover:border-electric-cyan hover:scale-105'
                       }`}
-                      style={{ borderColor: isMyChoice ? '#00f0ff' : `${upgrade.color}40` }}
+                      style={{
+                        borderColor: isMyChoice ? '#00f0ff' : isTeammateChoice ? '#ff2d6a' : `${upgrade.color}40`
+                      }}
                     >
                       {isMyChoice && (
                         <div className="absolute top-2 right-2 text-electric-cyan text-xs font-mono">
                           YOUR PICK
+                        </div>
+                      )}
+                      {isTeammateChoice && (
+                        <div className="absolute top-2 left-2 text-electric-pink text-xs font-mono">
+                          P2 PICK
                         </div>
                       )}
                       <div

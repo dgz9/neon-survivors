@@ -134,7 +134,8 @@ export function updateGameState(
   width: number,
   height: number,
   input: { keys: Set<string>; mousePos: Vector2; mouseDown: boolean },
-  config: GameConfig = DEFAULT_CONFIG
+  config: GameConfig = DEFAULT_CONFIG,
+  player2?: Player | null
 ): GameState {
   if (!state.isRunning || state.isPaused || state.isGameOver) {
     return state;
@@ -281,8 +282,8 @@ export function updateGameState(
     multiplier = Math.max(1, multiplier - 0.01 * deltaTime);
   }
 
-  // Update enemies
-  enemies = enemies.map(e => updateEnemy(e, player, effectiveDelta, currentTime));
+  // Update enemies - target closest player
+  enemies = enemies.map(e => updateEnemy(e, player, effectiveDelta, currentTime, player2));
 
   // Check enemy-player collision
   const collision = checkEnemyPlayerCollision(enemies, player, currentTime);
@@ -841,9 +842,20 @@ function checkProjectileCollisions(
   return { updatedEnemies, updatedProjectiles, killedEnemies, damageParticles, damageDealt };
 }
 
-function updateEnemy(enemy: Enemy, player: Player, deltaTime: number, currentTime: number): Enemy {
-  const dx = player.position.x - enemy.position.x;
-  const dy = player.position.y - enemy.position.y;
+function updateEnemy(enemy: Enemy, player: Player, deltaTime: number, currentTime: number, player2?: Player | null): Enemy {
+  // Target the closest player (if player2 exists and is alive)
+  let targetPlayer = player;
+  if (player2 && player2.health > 0) {
+    const dist1 = Math.hypot(player.position.x - enemy.position.x, player.position.y - enemy.position.y);
+    const dist2 = Math.hypot(player2.position.x - enemy.position.x, player2.position.y - enemy.position.y);
+    // If P1 is dead, always target P2. Otherwise target closest.
+    if (player.health <= 0 || dist2 < dist1) {
+      targetPlayer = player2;
+    }
+  }
+
+  const dx = targetPlayer.position.x - enemy.position.x;
+  const dy = targetPlayer.position.y - enemy.position.y;
   const distance = Math.sqrt(dx * dx + dy * dy);
 
   if (distance <= 0) return enemy;
