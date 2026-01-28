@@ -380,26 +380,20 @@ export default function CoopGame({
             isRunning: boolean;
           };
 
-          // Handle game over immediately when received from host
+          // Handle game over - just set the flag, let the game loop call onGameOver
+          // This ensures onGameOver is only called once (from the game loop)
           if (receivedState.isGameOver) {
-            // Set local state so game loop also exits
             if (gameStateRef.current) {
               gameStateRef.current.isGameOver = true;
-            }
-            const teamNames = players.map(p => p.name);
-            onGameOver(
-              receivedState.score,
-              receivedState.wave,
-              (receivedState.player?.kills || 0) + (receivedState.player2?.kills || 0),
-              {
-                totalDamageDealt: 0,
-                totalDamageTaken: 0,
-                survivalTime: Date.now() - (gameStateRef.current?.startTime || Date.now()),
-                peakMultiplier: receivedState.multiplier || 1,
-                weaponLevels: receivedState.player?.weapons?.map((w: { type: string; level: number }) => ({ type: w.type, level: w.level })) || [],
-                teamNames,
+              // Store the received data for the game loop to use
+              gameStateRef.current.score = receivedState.score;
+              gameStateRef.current.wave = receivedState.wave;
+              gameStateRef.current.player.kills = receivedState.player?.kills || 0;
+              if (player2Ref.current) {
+                player2Ref.current.kills = receivedState.player2?.kills || 0;
               }
-            );
+              gameStateRef.current.multiplier = receivedState.multiplier || 1;
+            }
             return;
           }
 
@@ -736,30 +730,33 @@ export default function CoopGame({
           p2.position.x = Math.max(p2.radius, Math.min(dimensions.width - p2.radius, p2.position.x));
           p2.position.y = Math.max(p2.radius, Math.min(dimensions.height - p2.radius, p2.position.y));
           
-          // P2 auto-fire towards nearest enemy or mouse
+          // P2 fires towards mouse position (same as P1)
           const now = Date.now();
           for (const weapon of p2.weapons) {
             if (now - weapon.lastFired >= weapon.fireRate) {
-              const nearestEnemy = gameStateRef.current.enemies.reduce((nearest, enemy) => {
-                const dist = Math.hypot(enemy.position.x - p2.position.x, enemy.position.y - p2.position.y);
-                if (!nearest || dist < nearest.dist) {
-                  return { enemy, dist };
+              // Use remote mouse position for aiming
+              const mousePos = remoteInput.mousePos;
+              const angle = Math.atan2(
+                mousePos.y - p2.position.y,
+                mousePos.x - p2.position.x
+              );
+
+              // Support multiple projectiles (spread weapons)
+              const projectileCount = weapon.projectileCount || 1;
+              for (let i = 0; i < projectileCount; i++) {
+                let projectileAngle = angle;
+
+                if (projectileCount > 1) {
+                  const spread = weapon.type === 'spread' ? Math.PI / 3 : Math.PI / 6;
+                  projectileAngle = angle - spread / 2 + (spread * i / (projectileCount - 1));
                 }
-                return nearest;
-              }, null as { enemy: typeof gameStateRef.current.enemies[0]; dist: number } | null);
-              
-              if (nearestEnemy) {
-                const angle = Math.atan2(
-                  nearestEnemy.enemy.position.y - p2.position.y,
-                  nearestEnemy.enemy.position.x - p2.position.x
-                );
-                
+
                 gameStateRef.current.projectiles.push({
-                  id: `p2-proj-${now}-${Math.random()}`,
+                  id: `p2-proj-${now}-${Math.random()}-${i}`,
                   position: { ...p2.position },
                   velocity: {
-                    x: Math.cos(angle) * weapon.projectileSpeed,
-                    y: Math.sin(angle) * weapon.projectileSpeed,
+                    x: Math.cos(projectileAngle) * weapon.projectileSpeed,
+                    y: Math.sin(projectileAngle) * weapon.projectileSpeed,
                   },
                   radius: 6,
                   color: PLAYER_COLORS[1],
@@ -768,9 +765,9 @@ export default function CoopGame({
                   piercing: weapon.piercing || 0,
                   hitEnemies: new Set<string>(),
                 });
-                
-                weapon.lastFired = now;
               }
+
+              weapon.lastFired = now;
             }
           }
           
@@ -875,6 +872,22 @@ export default function CoopGame({
             invulnerableUntil: player2Ref.current.invulnerableUntil,
             level: player2Ref.current.level,
             kills: player2Ref.current.kills,
+            // Include weapons and stats so upgrades sync to guest
+            weapons: player2Ref.current.weapons.map(w => ({
+              type: w.type,
+              level: w.level,
+              damage: w.damage,
+              fireRate: w.fireRate,
+              projectileSpeed: w.projectileSpeed,
+              projectileCount: w.projectileCount,
+              piercing: w.piercing,
+              lastFired: w.lastFired,
+            })),
+            speed: player2Ref.current.speed,
+            baseSpeed: player2Ref.current.baseSpeed,
+            speedBonus: player2Ref.current.speedBonus,
+            magnetMultiplier: player2Ref.current.magnetMultiplier,
+            magnetBonus: player2Ref.current.magnetBonus,
           } : null;
 
           // Don't sync particles - guest generates own visual effects locally
