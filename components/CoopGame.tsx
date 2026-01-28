@@ -78,6 +78,10 @@ export default function CoopGame({
   const [showUpgrades, setShowUpgrades] = useState(false);
   const [availableUpgrades, setAvailableUpgrades] = useState<Upgrade[]>([]);
   const [soundEnabled, setSoundEnabled] = useState(true);
+  // Upgrade sync state
+  const [myUpgradeChoice, setMyUpgradeChoice] = useState<string | null>(null);
+  const [otherUpgradeChoice, setOtherUpgradeChoice] = useState<string | null>(null);
+  const [waitingForOther, setWaitingForOther] = useState(false);
   const lastWaveRef = useRef<number>(1);
   const lastHealthRef = useRef<number>(100);
   const lastSyncRef = useRef<number>(0);
@@ -366,6 +370,38 @@ export default function CoopGame({
             pendingGameStateRef.current = receivedState;
           }
         }
+
+        // Handle level-up message from host (guest receives)
+        if (data.type === 'level-up' && !isHost) {
+          setShowUpgrades(true);
+          setAvailableUpgrades(data.availableUpgrades as Upgrade[]);
+          setMyUpgradeChoice(null);
+          setOtherUpgradeChoice(null);
+          setWaitingForOther(false);
+          playLevelUp();
+        }
+
+        // Handle upgrade-selected from other player
+        if (data.type === 'upgrade-selected') {
+          setOtherUpgradeChoice(data.upgradeId);
+        }
+
+        // Handle upgrades-complete from host (both receive)
+        if (data.type === 'upgrades-complete') {
+          // Apply the upgrade and close the menu
+          if (gameStateRef.current) {
+            const upgrade = availableUpgrades.find(u => u.id === data.upgradeId);
+            if (upgrade) {
+              gameStateRef.current = applyUpgrade(gameStateRef.current, upgrade);
+            }
+          }
+          // Reset upgrade state
+          setShowUpgrades(false);
+          setAvailableUpgrades([]);
+          setMyUpgradeChoice(null);
+          setOtherUpgradeChoice(null);
+          setWaitingForOther(false);
+        }
       } catch (e) {
         console.error('Failed to parse multiplayer message:', e);
       }
@@ -373,7 +409,7 @@ export default function CoopGame({
 
     socket.addEventListener('message', handleMessage);
     return () => socket.removeEventListener('message', handleMessage);
-  }, [socket, isHost, onGameOver, players]);
+  }, [socket, isHost, onGameOver, players, availableUpgrades]);
 
   // Handle input
   useEffect(() => {
@@ -414,19 +450,92 @@ export default function CoopGame({
     };
   }, []);
 
-  // Handle upgrade selection
+  // Handle upgrade selection (co-op synchronized)
   const handleUpgrade = useCallback((upgrade: Upgrade) => {
-    if (gameStateRef.current) {
-      gameStateRef.current = applyUpgrade(gameStateRef.current, upgrade);
-      
-      if (gameStateRef.current.pendingLevelUps > 0) {
-        setAvailableUpgrades(gameStateRef.current.availableUpgrades);
-      } else {
-        setShowUpgrades(false);
-        setAvailableUpgrades([]);
+    // Store my choice locally
+    setMyUpgradeChoice(upgrade.id);
+
+    // Send my selection to other player
+    socket.send(JSON.stringify({
+      type: 'upgrade-selected',
+      playerId: socket.id,
+      upgradeId: upgrade.id,
+    }));
+
+    // Check if other player has already chosen
+    if (otherUpgradeChoice) {
+      // Both have chosen - host sends final upgrade
+      if (isHost && gameStateRef.current) {
+        // Host's choice wins (or could randomize)
+        gameStateRef.current = applyUpgrade(gameStateRef.current, upgrade);
+
+        // Send upgrades-complete to all
+        socket.send(JSON.stringify({
+          type: 'upgrades-complete',
+          upgradeId: upgrade.id,
+        }));
+
+        // Check for more pending level ups
+        if (gameStateRef.current.pendingLevelUps > 0) {
+          // Send new level-up for next pending
+          socket.send(JSON.stringify({
+            type: 'level-up',
+            availableUpgrades: gameStateRef.current.availableUpgrades,
+            level: gameStateRef.current.player.level,
+          }));
+          setAvailableUpgrades(gameStateRef.current.availableUpgrades);
+          setMyUpgradeChoice(null);
+          setOtherUpgradeChoice(null);
+          setWaitingForOther(false);
+        } else {
+          setShowUpgrades(false);
+          setAvailableUpgrades([]);
+          setMyUpgradeChoice(null);
+          setOtherUpgradeChoice(null);
+          setWaitingForOther(false);
+        }
+      }
+    } else {
+      // Still waiting for other player
+      setWaitingForOther(true);
+    }
+  }, [socket, isHost, otherUpgradeChoice]);
+
+  // Handle when other player's choice arrives after I've already chosen (host only)
+  useEffect(() => {
+    if (isHost && myUpgradeChoice && otherUpgradeChoice && waitingForOther && gameStateRef.current) {
+      // Both have chosen - apply host's upgrade and send complete
+      const upgrade = availableUpgrades.find(u => u.id === myUpgradeChoice);
+      if (upgrade) {
+        gameStateRef.current = applyUpgrade(gameStateRef.current, upgrade);
+
+        // Send upgrades-complete to all
+        socket.send(JSON.stringify({
+          type: 'upgrades-complete',
+          upgradeId: myUpgradeChoice,
+        }));
+
+        // Check for more pending level ups
+        if (gameStateRef.current.pendingLevelUps > 0) {
+          socket.send(JSON.stringify({
+            type: 'level-up',
+            availableUpgrades: gameStateRef.current.availableUpgrades,
+            level: gameStateRef.current.player.level,
+          }));
+          setAvailableUpgrades(gameStateRef.current.availableUpgrades);
+          setMyUpgradeChoice(null);
+          setOtherUpgradeChoice(null);
+          setWaitingForOther(false);
+        } else {
+          setShowUpgrades(false);
+          setAvailableUpgrades([]);
+          setMyUpgradeChoice(null);
+          setOtherUpgradeChoice(null);
+          setWaitingForOther(false);
+        }
       }
     }
-  }, []);
+  }, [isHost, myUpgradeChoice, otherUpgradeChoice, waitingForOther, availableUpgrades, socket]);
 
   // Game loop
   useEffect(() => {
@@ -566,18 +675,77 @@ export default function CoopGame({
         // Sync state to guest
         if (timestamp - lastSyncRef.current > SYNC_INTERVAL) {
           lastSyncRef.current = timestamp;
+
+          // Prune data to reduce bandwidth
+          // Enemies: only essential fields (type lets guest derive color, etc.)
+          const prunedEnemies = gameStateRef.current.enemies.map(e => ({
+            id: e.id,
+            position: e.position,
+            health: e.health,
+            type: e.type,
+            radius: e.radius,
+            damage: e.damage,
+          }));
+
+          // Projectiles: drop hitEnemies Set entirely
+          const prunedProjectiles = gameStateRef.current.projectiles.map(p => ({
+            id: p.id,
+            position: p.position,
+            velocity: p.velocity,
+            damage: p.damage,
+            radius: p.radius,
+            color: p.color,
+            isEnemy: p.isEnemy,
+            piercing: p.piercing,
+          }));
+
+          // Experience orbs: minimal data
+          const prunedOrbs = gameStateRef.current.experienceOrbs.map(o => ({
+            id: o.id,
+            position: o.position,
+            value: o.value,
+          }));
+
+          // Players: only core combat data, exclude full weapon configs
+          const prunedPlayer = {
+            position: gameStateRef.current.player.position,
+            velocity: gameStateRef.current.player.velocity,
+            health: gameStateRef.current.player.health,
+            maxHealth: gameStateRef.current.player.maxHealth,
+            radius: gameStateRef.current.player.radius,
+            color: gameStateRef.current.player.color,
+            invulnerableUntil: gameStateRef.current.player.invulnerableUntil,
+            level: gameStateRef.current.player.level,
+            experience: gameStateRef.current.player.experience,
+            kills: gameStateRef.current.player.kills,
+            weapons: gameStateRef.current.player.weapons.map(w => ({ type: w.type, level: w.level })),
+          };
+
+          const prunedPlayer2 = player2Ref.current ? {
+            position: player2Ref.current.position,
+            velocity: player2Ref.current.velocity,
+            health: player2Ref.current.health,
+            maxHealth: player2Ref.current.maxHealth,
+            radius: player2Ref.current.radius,
+            color: player2Ref.current.color,
+            invulnerableUntil: player2Ref.current.invulnerableUntil,
+            level: player2Ref.current.level,
+            kills: player2Ref.current.kills,
+          } : null;
+
           // Limit particles sent to reduce bandwidth (keep only recent/important ones)
-          const limitedParticles = gameStateRef.current.particles.slice(-50);
+          const limitedParticles = gameStateRef.current.particles.slice(-30);
+
           sendGameState(socket, {
-            player: gameStateRef.current.player,
-            player2: player2Ref.current,
+            player: prunedPlayer,
+            player2: prunedPlayer2,
             score: gameStateRef.current.score,
             wave: gameStateRef.current.wave,
             multiplier: gameStateRef.current.multiplier,
-            enemies: gameStateRef.current.enemies,
-            projectiles: gameStateRef.current.projectiles,
+            enemies: prunedEnemies,
+            projectiles: prunedProjectiles,
             powerups: gameStateRef.current.powerups,
-            experienceOrbs: gameStateRef.current.experienceOrbs,
+            experienceOrbs: prunedOrbs,
             particles: limitedParticles,
             isGameOver: gameStateRef.current.isGameOver,
             isRunning: gameStateRef.current.isRunning,
@@ -601,7 +769,17 @@ export default function CoopGame({
         if (gameStateRef.current.pendingLevelUps > 0 && !showUpgrades) {
           setShowUpgrades(true);
           setAvailableUpgrades(gameStateRef.current.availableUpgrades);
+          setMyUpgradeChoice(null);
+          setOtherUpgradeChoice(null);
+          setWaitingForOther(false);
           playLevelUp();
+
+          // Send level-up message to guest
+          socket.send(JSON.stringify({
+            type: 'level-up',
+            availableUpgrades: gameStateRef.current.availableUpgrades,
+            level: gameStateRef.current.player.level,
+          }));
         }
         
         // Sound effects
@@ -812,42 +990,75 @@ export default function CoopGame({
           </div>
         )}
 
-        {showUpgrades && isHost && (
+        {showUpgrades && (
           <div className="absolute inset-0 flex items-center justify-center bg-brutal-black/95 z-30">
             <div className="text-center max-w-2xl w-full px-4">
               <div className="font-display text-4xl text-electric-cyan mb-2 glitch-text" data-text="LEVEL UP!">
                 LEVEL UP!
               </div>
-              <p className="font-mono text-sm text-white/60 mb-8">
+              <p className="font-mono text-sm text-white/60 mb-4">
                 Level {displayState?.level || 1} — Choose an upgrade
               </p>
-              
+
+              {/* Waiting indicator */}
+              {waitingForOther && (
+                <div className="mb-6 p-3 bg-electric-yellow/20 border border-electric-yellow/40">
+                  <p className="font-mono text-sm text-electric-yellow animate-pulse">
+                    Waiting for teammate to choose...
+                  </p>
+                </div>
+              )}
+
+              {/* Show what other player chose if they chose first */}
+              {otherUpgradeChoice && !myUpgradeChoice && (
+                <div className="mb-4 p-2 bg-electric-pink/20 border border-electric-pink/40">
+                  <p className="font-mono text-xs text-electric-pink">
+                    Teammate has made their choice!
+                  </p>
+                </div>
+              )}
+
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                {availableUpgrades.map((upgrade) => (
-                  <button
-                    key={upgrade.id}
-                    onClick={() => handleUpgrade(upgrade)}
-                    className="group relative bg-brutal-dark border-2 border-white/20 hover:border-electric-cyan p-6 transition-all duration-200 hover:scale-105"
-                    style={{ borderColor: `${upgrade.color}40` }}
-                  >
-                    <div 
-                      className="absolute inset-0 opacity-0 group-hover:opacity-20 transition-opacity"
-                      style={{ backgroundColor: upgrade.color }}
-                    />
-                    <div className="relative z-10">
-                      <div className="text-4xl mb-3">{upgrade.icon}</div>
-                      <div 
-                        className="font-display text-xl mb-2"
-                        style={{ color: upgrade.color }}
-                      >
-                        {upgrade.name}
+                {availableUpgrades.map((upgrade) => {
+                  const isMyChoice = myUpgradeChoice === upgrade.id;
+                  return (
+                    <button
+                      key={upgrade.id}
+                      onClick={() => !myUpgradeChoice && handleUpgrade(upgrade)}
+                      disabled={!!myUpgradeChoice}
+                      className={`group relative bg-brutal-dark border-2 p-6 transition-all duration-200 ${
+                        myUpgradeChoice
+                          ? isMyChoice
+                            ? 'border-electric-cyan scale-105'
+                            : 'border-white/10 opacity-50'
+                          : 'border-white/20 hover:border-electric-cyan hover:scale-105'
+                      }`}
+                      style={{ borderColor: isMyChoice ? '#00f0ff' : `${upgrade.color}40` }}
+                    >
+                      {isMyChoice && (
+                        <div className="absolute top-2 right-2 text-electric-cyan text-xs font-mono">
+                          YOUR PICK
+                        </div>
+                      )}
+                      <div
+                        className="absolute inset-0 opacity-0 group-hover:opacity-20 transition-opacity"
+                        style={{ backgroundColor: upgrade.color }}
+                      />
+                      <div className="relative z-10">
+                        <div className="text-4xl mb-3">{upgrade.icon}</div>
+                        <div
+                          className="font-display text-xl mb-2"
+                          style={{ color: upgrade.color }}
+                        >
+                          {upgrade.name}
+                        </div>
+                        <p className="font-mono text-xs text-white/60">
+                          {upgrade.description}
+                        </p>
                       </div>
-                      <p className="font-mono text-xs text-white/60">
-                        {upgrade.description}
-                      </p>
-                    </div>
-                  </button>
-                ))}
+                    </button>
+                  );
+                })}
               </div>
             </div>
           </div>

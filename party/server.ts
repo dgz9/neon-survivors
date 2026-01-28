@@ -25,13 +25,30 @@ interface StartGame {
   arena: string;
 }
 
+interface LevelUp {
+  type: "level-up";
+  availableUpgrades: unknown[];
+  level: number;
+}
+
+interface UpgradeSelected {
+  type: "upgrade-selected";
+  playerId: string;
+  upgradeId: string;
+}
+
+interface UpgradesComplete {
+  type: "upgrades-complete";
+  upgradeId: string;
+}
+
 interface RoomInfo {
   type: "room-info";
   players: { id: string; name: string; imageUrl: string; isHost: boolean }[];
   roomCode: string;
 }
 
-type Message = PlayerJoin | PlayerInput | GameStateSync | StartGame;
+type Message = PlayerJoin | PlayerInput | GameStateSync | StartGame | LevelUp | UpgradeSelected | UpgradesComplete;
 
 interface Player {
   id: string;
@@ -108,6 +125,21 @@ export default class NeonSurvivorsParty implements Party.Server {
         case "start-game":
           console.log(`[SERVER] Game starting! Players: ${this.players.size}, Connections: ${this.connections.size}`);
           this.gameStarted = true;
+          this.broadcastToConnections(message);
+          break;
+
+        case "level-up":
+          // Host sends level-up to guest
+          this.broadcastToOthers(message, sender.id);
+          break;
+
+        case "upgrade-selected":
+          // Either player can send their selection, broadcast to others
+          this.broadcastToOthers(message, sender.id);
+          break;
+
+        case "upgrades-complete":
+          // Host sends final upgrade choice to all
           this.broadcastToConnections(message);
           break;
       }

@@ -22,7 +22,10 @@ export type MultiplayerMessage =
   | { type: "player-leave"; id: string }
   | { type: "player-input"; id: string; keys: string[]; mousePos: { x: number; y: number } }
   | { type: "game-state"; state: unknown; hostId: string }
-  | { type: "start-game"; arena: string };
+  | { type: "start-game"; arena: string }
+  | { type: "level-up"; availableUpgrades: { id: string; name: string; description: string; icon: string; color: string; type: string; weaponType?: string }[]; level: number }
+  | { type: "upgrade-selected"; playerId: string; upgradeId: string }
+  | { type: "upgrades-complete"; upgradeId: string };
 
 export function generateRoomCode(): string {
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
