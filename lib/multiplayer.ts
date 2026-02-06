@@ -23,9 +23,23 @@ export type MultiplayerMessage =
   | { type: "player-input"; id: string; keys: string[]; mousePos: { x: number; y: number } }
   | { type: "game-state"; state: unknown; hostId: string }
   | { type: "start-game"; arena: string }
-  | { type: "level-up"; availableUpgrades: { id: string; name: string; description: string; icon: string; color: string; type: string; weaponType?: string }[]; level: number }
-  | { type: "upgrade-selected"; playerId: string; upgradeId: string }
-  | { type: "upgrades-complete"; upgradeId: string };
+  | { type: "level-up"; availableUpgrades: { id: string; name: string; description: string; icon: string; color: string; type: string; weaponType?: string; stat?: string }[]; level: number }
+  | { type: "upgrade-selected"; playerId: string; upgradeId: string; upgradeName?: string }
+  | { type: "upgrades-complete"; p1UpgradeId: string; p2UpgradeId: string }
+  | {
+      type: "game-over";
+      score: number;
+      wave: number;
+      kills: number;
+      stats: {
+        totalDamageDealt: number;
+        totalDamageTaken: number;
+        survivalTime: number;
+        peakMultiplier: number;
+        weaponLevels: { type: string; level: number }[];
+        teamNames: string[];
+      };
+    };
 
 export function generateRoomCode(): string {
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";

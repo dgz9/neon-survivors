@@ -69,18 +69,22 @@ export default function Home() {
     setGameStats({ score, wave, kills, stats });
     setPhase('gameover');
     
-    // Close co-op socket if exists
-    coopSocket?.close();
-    setCoopSocket(null);
-  }, [coopSocket]);
+    // In co-op, keep socket alive briefly so final game-over packets can land on both clients.
+    if (gameMode !== 'coop') {
+      coopSocket?.close();
+      setCoopSocket(null);
+    }
+  }, [coopSocket, gameMode]);
 
   const handlePlayAgain = useCallback(() => {
     if (gameMode === 'coop') {
+      coopSocket?.close();
+      setCoopSocket(null);
       setPhase('lobby');
     } else {
       setPhase('playing');
     }
-  }, [gameMode]);
+  }, [gameMode, coopSocket]);
 
   const handleBackToMenu = useCallback(() => {
     setPhase('menu');

@@ -35,11 +35,28 @@ interface UpgradeSelected {
   type: "upgrade-selected";
   playerId: string;
   upgradeId: string;
+  upgradeName?: string;
 }
 
 interface UpgradesComplete {
   type: "upgrades-complete";
-  upgradeId: string;
+  p1UpgradeId: string;
+  p2UpgradeId: string;
+}
+
+interface GameOver {
+  type: "game-over";
+  score: number;
+  wave: number;
+  kills: number;
+  stats: {
+    totalDamageDealt: number;
+    totalDamageTaken: number;
+    survivalTime: number;
+    peakMultiplier: number;
+    weaponLevels: { type: string; level: number }[];
+    teamNames: string[];
+  };
 }
 
 interface RoomInfo {
@@ -48,7 +65,7 @@ interface RoomInfo {
   roomCode: string;
 }
 
-type Message = PlayerJoin | PlayerInput | GameStateSync | StartGame | LevelUp | UpgradeSelected | UpgradesComplete;
+type Message = PlayerJoin | PlayerInput | GameStateSync | StartGame | LevelUp | UpgradeSelected | UpgradesComplete | GameOver;
 
 interface Player {
   id: string;
@@ -141,6 +158,11 @@ export default class NeonSurvivorsParty implements Party.Server {
         case "upgrades-complete":
           // Host sends final upgrade choice to all
           this.broadcastToConnections(message);
+          break;
+
+        case "game-over":
+          // Host sends final results immediately to guest
+          this.broadcastToOthers(message, sender.id);
           break;
       }
     } catch (e) {
