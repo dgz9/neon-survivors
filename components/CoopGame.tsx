@@ -193,8 +193,8 @@ export default function CoopGame({
   const guestUpgradeOptionsRef = useRef<Upgrade[]>([]);
   const gameOverSentRef = useRef(false);
   const gameOverHandledRef = useRef(false);
-  const SYNC_INTERVAL = 33; // ~30Hz state sync for smoother guest playback
-  const INPUT_SEND_INTERVAL = 20; // ~50Hz input updates for lower control latency
+  const SYNC_INTERVAL = 40; // 25Hz state sync keeps payload lighter and avoids WS backlog jitter
+  const INPUT_SEND_INTERVAL = 16; // ~60Hz input updates for tighter guest control
 
   // Find my player info
   const myPlayer = players.find(p => p.id === socket.id);
@@ -231,6 +231,14 @@ export default function CoopGame({
       }
     );
   }, [onGameOver, players]);
+
+  const sendGuestInputNow = useCallback((force = false) => {
+    if (isHost) return;
+    const now = performance.now();
+    if (!force && now - lastInputSendRef.current < INPUT_SEND_INTERVAL) return;
+    lastInputSendRef.current = now;
+    sendInput(socket, Array.from(inputRef.current.keys), inputRef.current.mousePos);
+  }, [isHost, socket]);
 
   // Handle resize
   useEffect(() => {
@@ -602,6 +610,7 @@ export default function CoopGame({
     const handleKeyDown = (e: KeyboardEvent) => {
       const key = e.key.toLowerCase();
       inputRef.current.keys.add(key);
+      sendGuestInputNow(true);
       
       if (key === 'escape') {
         setIsPaused(p => !p);
@@ -610,6 +619,7 @@ export default function CoopGame({
 
     const handleKeyUp = (e: KeyboardEvent) => {
       inputRef.current.keys.delete(e.key.toLowerCase());
+      sendGuestInputNow(true);
     };
 
     const handleMouseMove = (e: MouseEvent) => {
@@ -622,6 +632,8 @@ export default function CoopGame({
           x: (e.clientX - rect.left) * scaleX,
           y: (e.clientY - rect.top) * scaleY,
         };
+        // Mouse updates do not need to be immediate every frame, but keep them fresh.
+        sendGuestInputNow(false);
       }
     };
 
@@ -634,7 +646,7 @@ export default function CoopGame({
       window.removeEventListener('keyup', handleKeyUp);
       window.removeEventListener('mousemove', handleMouseMove);
     };
-  }, []);
+  }, [sendGuestInputNow]);
 
   const resolveUpgradeRound = useCallback((p1UpgradeId: string, p2UpgradeId: string) => {
     if (!isHost || !gameStateRef.current) return;
@@ -725,18 +737,16 @@ export default function CoopGame({
 
       // Guest: send input to host (throttled)
       if (!isHost && timestamp - lastInputSendRef.current > INPUT_SEND_INTERVAL) {
-        lastInputSendRef.current = timestamp;
-        const keys = Array.from(inputRef.current.keys);
-        sendInput(socket, keys, inputRef.current.mousePos);
+        sendGuestInputNow(false);
       }
 
       // Guest: interpolate remote entities and locally predict own movement
       if (!isHost && gameStateRef.current && gameStateRef.current.isRunning) {
-        const remoteLerpFactor = 0.34;
+        const remoteLerpFactor = 0.4;
         const msSinceSnapshot = targetStateRef.current.lastSnapshotAt > 0
           ? Math.min(120, timestamp - targetStateRef.current.lastSnapshotAt)
           : 0;
-        const predictionFrames = msSinceSnapshot / 16.67;
+        const predictionFrames = (msSinceSnapshot + SYNC_INTERVAL * 0.5) / 16.67;
 
         // Lerp host (remote) player position
         if (targetStateRef.current.playerPos && gameStateRef.current.player) {
@@ -792,11 +802,21 @@ export default function CoopGame({
             const errorY = target.y - p2.position.y;
             const errorDistance = Math.hypot(errorX, errorY);
 
-            // Only correct when drift is visible; avoid constant drag from stale snapshots.
-            if (errorDistance > 5) {
-              const correctionFactor = Math.min(0.45, 0.12 + errorDistance / 90);
-              p2.position.x += errorX * correctionFactor;
-              p2.position.y += errorY * correctionFactor;
+            // Only correct visible drift and cap per-frame correction to avoid rubber-banding feel.
+            if (errorDistance > 12) {
+              const correctionFactor = errorDistance > 48 ? 0.32 : 0.18;
+              const maxCorrection = errorDistance > 48 ? 14 : 6;
+              const stepX = errorX * correctionFactor;
+              const stepY = errorY * correctionFactor;
+              const stepLen = Math.hypot(stepX, stepY);
+              if (stepLen > maxCorrection && stepLen > 0) {
+                const scale = maxCorrection / stepLen;
+                p2.position.x += stepX * scale;
+                p2.position.y += stepY * scale;
+              } else {
+                p2.position.x += stepX;
+                p2.position.y += stepY;
+              }
             }
           }
         }
@@ -1205,7 +1225,7 @@ export default function CoopGame({
     return () => {
       cancelAnimationFrame(animationFrameRef.current);
     };
-  }, [isLoading, isPaused, showUpgrades, dimensions, isHost, socket, players, finishGameOver]);
+  }, [isLoading, isPaused, showUpgrades, dimensions, isHost, socket, players, finishGameOver, sendGuestInputNow]);
 
   return (
     <div 
