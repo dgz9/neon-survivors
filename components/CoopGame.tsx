@@ -38,15 +38,33 @@ interface CoopGameProps {
 const PLAYER_COLORS = ['#00f0ff', '#ff2d6a']; // cyan for P1, pink for P2
 
 function recalculatePlayerStats(player: Player, currentTime: number): Player {
-  const activeBuffs = player.activeBuffs.filter(buff => buff.expiresAt > currentTime);
+  const activeBuffs = (player.activeBuffs || []).filter(buff => buff.expiresAt > currentTime);
   const speedBuff = activeBuffs.find(buff => buff.type === 'speed');
   const magnetBuff = activeBuffs.find(buff => buff.type === 'magnet');
+  const baseSpeed = player.baseSpeed || DEFAULT_CONFIG.playerSpeed;
+  const speedBonus = player.speedBonus || 0;
+  const magnetBonus = player.magnetBonus || 0;
 
   return {
     ...player,
+    baseSpeed,
+    speedBonus,
+    magnetBonus,
     activeBuffs,
-    speed: Math.min(8, (player.baseSpeed + player.speedBonus) * (speedBuff?.multiplier || 1)),
-    magnetMultiplier: (1 + player.magnetBonus) * (magnetBuff?.multiplier || 1),
+    speed: Math.min(8, (baseSpeed + speedBonus) * (speedBuff?.multiplier || 1)),
+    magnetMultiplier: (1 + magnetBonus) * (magnetBuff?.multiplier || 1),
+  };
+}
+
+function normalizeSyncedPlayer(player: Player): Player {
+  return {
+    ...player,
+    activeBuffs: player.activeBuffs || [],
+    speedBonus: player.speedBonus || 0,
+    magnetBonus: player.magnetBonus || 0,
+    baseSpeed: player.baseSpeed || DEFAULT_CONFIG.playerSpeed,
+    speed: player.speed || player.baseSpeed || DEFAULT_CONFIG.playerSpeed,
+    magnetMultiplier: player.magnetMultiplier || 1,
   };
 }
 
@@ -384,7 +402,7 @@ export default function CoopGame({
       gameStateRef.current.particles = receivedState.particles as typeof gameStateRef.current.particles;
       gameStateRef.current.isGameOver = receivedState.isGameOver;
       gameStateRef.current.isRunning = receivedState.isRunning;
-      player2Ref.current = receivedState.player2;
+      player2Ref.current = receivedState.player2 ? normalizeSyncedPlayer(receivedState.player2) : null;
       if (player2Ref.current) {
         player2Ref.current.image = p2ImageRef.current;
       }
@@ -508,7 +526,7 @@ export default function CoopGame({
             // Update player2 with position preservation
             if (receivedState.player2) {
               const currentP2Pos = player2Ref.current?.position;
-              player2Ref.current = receivedState.player2;
+              player2Ref.current = normalizeSyncedPlayer(receivedState.player2);
               if (currentP2Pos) {
                 player2Ref.current.position = currentP2Pos;
               }
@@ -930,6 +948,12 @@ export default function CoopGame({
             experience: gameStateRef.current.player.experience,
             kills: gameStateRef.current.player.kills,
             weapons: gameStateRef.current.player.weapons.map(w => ({ type: w.type, level: w.level })),
+            speed: gameStateRef.current.player.speed,
+            baseSpeed: gameStateRef.current.player.baseSpeed,
+            speedBonus: gameStateRef.current.player.speedBonus,
+            magnetMultiplier: gameStateRef.current.player.magnetMultiplier,
+            magnetBonus: gameStateRef.current.player.magnetBonus,
+            activeBuffs: gameStateRef.current.player.activeBuffs,
           };
 
           const prunedPlayer2 = player2Ref.current ? {
@@ -958,6 +982,7 @@ export default function CoopGame({
             speedBonus: player2Ref.current.speedBonus,
             magnetMultiplier: player2Ref.current.magnetMultiplier,
             magnetBonus: player2Ref.current.magnetBonus,
+            activeBuffs: player2Ref.current.activeBuffs,
           } : null;
 
           // Don't sync particles - guest generates own visual effects locally
