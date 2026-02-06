@@ -152,12 +152,18 @@ export default function CoopGame({
   // Target state for interpolation (guest only) - stores positions to lerp towards
   const targetStateRef = useRef<{
     playerPos: Vector2 | null;
+    playerVel: Vector2 | null;
     player2Pos: Vector2 | null;
+    player2Vel: Vector2 | null;
     enemyPositions: Map<string, Vector2>;
+    lastSnapshotAt: number;
   }>({
     playerPos: null,
+    playerVel: null,
     player2Pos: null,
+    player2Vel: null,
     enemyPositions: new Map(),
+    lastSnapshotAt: 0,
   });
 
   const [isLoading, setIsLoading] = useState(true);
@@ -187,8 +193,8 @@ export default function CoopGame({
   const guestUpgradeOptionsRef = useRef<Upgrade[]>([]);
   const gameOverSentRef = useRef(false);
   const gameOverHandledRef = useRef(false);
-  const SYNC_INTERVAL = 50; // ms between state syncs
-  const INPUT_SEND_INTERVAL = 50; // ms between input sends (same as sync)
+  const SYNC_INTERVAL = 33; // ~30Hz state sync for smoother guest playback
+  const INPUT_SEND_INTERVAL = 20; // ~50Hz input updates for lower control latency
 
   // Find my player info
   const myPlayer = players.find(p => p.id === socket.id);
@@ -485,7 +491,10 @@ export default function CoopGame({
           if (gameStateRef.current) {
             // Store target positions for interpolation (smooth movement)
             targetStateRef.current.playerPos = { ...receivedState.player.position };
+            targetStateRef.current.playerVel = receivedState.player.velocity ? { ...receivedState.player.velocity } : null;
             targetStateRef.current.player2Pos = receivedState.player2 ? { ...receivedState.player2.position } : null;
+            targetStateRef.current.player2Vel = receivedState.player2?.velocity ? { ...receivedState.player2.velocity } : null;
+            targetStateRef.current.lastSnapshotAt = performance.now();
 
             // Store enemy target positions
             targetStateRef.current.enemyPositions.clear();
@@ -723,11 +732,22 @@ export default function CoopGame({
 
       // Guest: interpolate remote entities and locally predict own movement
       if (!isHost && gameStateRef.current && gameStateRef.current.isRunning) {
-        const remoteLerpFactor = 0.25;
+        const remoteLerpFactor = 0.34;
+        const msSinceSnapshot = targetStateRef.current.lastSnapshotAt > 0
+          ? Math.min(120, timestamp - targetStateRef.current.lastSnapshotAt)
+          : 0;
+        const predictionFrames = msSinceSnapshot / 16.67;
 
         // Lerp host (remote) player position
         if (targetStateRef.current.playerPos && gameStateRef.current.player) {
-          const target = targetStateRef.current.playerPos;
+          const baseTarget = targetStateRef.current.playerPos;
+          const vel = targetStateRef.current.playerVel;
+          const target = vel
+            ? {
+                x: baseTarget.x + vel.x * predictionFrames,
+                y: baseTarget.y + vel.y * predictionFrames,
+              }
+            : baseTarget;
           gameStateRef.current.player.position.x += (target.x - gameStateRef.current.player.position.x) * remoteLerpFactor;
           gameStateRef.current.player.position.y += (target.y - gameStateRef.current.player.position.y) * remoteLerpFactor;
         }
@@ -760,10 +780,24 @@ export default function CoopGame({
 
           // Reconcile prediction toward authoritative host position.
           if (targetStateRef.current.player2Pos) {
-            const target = targetStateRef.current.player2Pos;
-            const correctionFactor = 0.18;
-            p2.position.x += (target.x - p2.position.x) * correctionFactor;
-            p2.position.y += (target.y - p2.position.y) * correctionFactor;
+            const baseTarget = targetStateRef.current.player2Pos;
+            const vel = targetStateRef.current.player2Vel;
+            const target = vel
+              ? {
+                  x: baseTarget.x + vel.x * predictionFrames,
+                  y: baseTarget.y + vel.y * predictionFrames,
+                }
+              : baseTarget;
+            const errorX = target.x - p2.position.x;
+            const errorY = target.y - p2.position.y;
+            const errorDistance = Math.hypot(errorX, errorY);
+
+            // Only correct when drift is visible; avoid constant drag from stale snapshots.
+            if (errorDistance > 5) {
+              const correctionFactor = Math.min(0.45, 0.12 + errorDistance / 90);
+              p2.position.x += errorX * correctionFactor;
+              p2.position.y += errorY * correctionFactor;
+            }
           }
         }
 
