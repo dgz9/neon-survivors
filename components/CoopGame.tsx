@@ -13,7 +13,7 @@ import {
   applyUpgrade,
 } from '@/lib/gameEngine';
 import { Upgrade } from '@/types/game';
-import { sendInput, sendGameState, MultiplayerMessage, MultiplayerPlayer } from '@/lib/multiplayer';
+import { sendInput, sendGameState, decodeGameState, MultiplayerMessage, MultiplayerPlayer } from '@/lib/multiplayer';
 import { playLevelUp, playDamage, playWaveComplete, setMuted } from '@/lib/audio';
 
 interface GameOverStats {
@@ -23,6 +23,16 @@ interface GameOverStats {
   peakMultiplier: number;
   weaponLevels: { type: string; level: number }[];
   teamNames: string[];
+}
+
+interface LocalPredictedProjectile {
+  id: string;
+  position: Vector2;
+  velocity: Vector2;
+  radius: number;
+  color: string;
+  lifeMs: number;
+  maxLifeMs: number;
 }
 
 interface CoopGameProps {
@@ -149,6 +159,8 @@ export default function CoopGame({
     keys: [],
     mousePos: { x: 0, y: 0 },
   });
+  const localPredictedProjectilesRef = useRef<LocalPredictedProjectile[]>([]);
+  const localShotCooldownRef = useRef<Record<string, number>>({});
   // Target state for interpolation (guest only) - stores positions to lerp towards
   const targetStateRef = useRef<{
     playerPos: Vector2 | null;
@@ -393,7 +405,7 @@ export default function CoopGame({
     projectiles: unknown[];
     powerups: unknown[];
     experienceOrbs: unknown[];
-    particles: unknown[];
+    particles?: unknown[];
     isGameOver: boolean;
     isRunning: boolean;
   } | null>(null);
@@ -413,7 +425,7 @@ export default function CoopGame({
       gameStateRef.current.projectiles = receivedState.projectiles as typeof gameStateRef.current.projectiles;
       gameStateRef.current.powerups = receivedState.powerups as typeof gameStateRef.current.powerups;
       gameStateRef.current.experienceOrbs = receivedState.experienceOrbs as typeof gameStateRef.current.experienceOrbs;
-      gameStateRef.current.particles = receivedState.particles as typeof gameStateRef.current.particles;
+      gameStateRef.current.particles = (receivedState.particles || []) as typeof gameStateRef.current.particles;
       gameStateRef.current.isGameOver = receivedState.isGameOver;
       gameStateRef.current.isRunning = receivedState.isRunning;
       player2Ref.current = receivedState.player2 ? normalizeSyncedPlayer(receivedState.player2) : null;
@@ -463,7 +475,7 @@ export default function CoopGame({
           return;
         } else if (data.type === 'game-state' && !isHost) {
           // Guest receives game state from host
-          const receivedState = data.state as {
+          const receivedState = decodeGameState(data.state) as {
             player: Player;
             player2: Player | null;
             score: number;
@@ -473,7 +485,7 @@ export default function CoopGame({
             projectiles: unknown[];
             powerups: unknown[];
             experienceOrbs: unknown[];
-            particles: unknown[];
+            particles?: unknown[];
             isGameOver: boolean;
             isRunning: boolean;
           };
@@ -536,6 +548,22 @@ export default function CoopGame({
             gameStateRef.current.projectiles = receivedState.projectiles as typeof gameStateRef.current.projectiles;
             gameStateRef.current.powerups = receivedState.powerups as typeof gameStateRef.current.powerups;
             gameStateRef.current.experienceOrbs = receivedState.experienceOrbs as typeof gameStateRef.current.experienceOrbs;
+            // Remove any short-lived local shot predictions once matching authoritative shots arrive.
+            if (localPredictedProjectilesRef.current.length > 0) {
+              const authoritativeP2Projectiles = (receivedState.projectiles as Array<{
+                position: Vector2;
+                isEnemy: boolean;
+                color: string;
+              }>).filter(p => !p.isEnemy && p.color === PLAYER_COLORS[1]);
+
+              if (authoritativeP2Projectiles.length > 0) {
+                localPredictedProjectilesRef.current = localPredictedProjectilesRef.current.filter(local =>
+                  !authoritativeP2Projectiles.some(auth =>
+                    Math.hypot(auth.position.x - local.position.x, auth.position.y - local.position.y) < 24
+                  )
+                );
+              }
+            }
             // Don't sync particles - guest generates own effects
             gameStateRef.current.isGameOver = receivedState.isGameOver;
             gameStateRef.current.isRunning = receivedState.isRunning;
@@ -819,6 +847,68 @@ export default function CoopGame({
               }
             }
           }
+        }
+
+        // Guest-side immediate shot prediction so P2 gunfire feels local.
+        if (player2Ref.current && !isPaused && !showUpgrades) {
+          const p2 = player2Ref.current;
+          const mousePos = inputRef.current.mousePos;
+          const nowMs = Date.now();
+
+          p2.weapons.forEach((weapon, weaponIndex) => {
+            const cooldownKey = `${weapon.type}-${weaponIndex}`;
+            const lastShotAt = localShotCooldownRef.current[cooldownKey] || 0;
+            if (nowMs - lastShotAt < weapon.fireRate) return;
+
+            const angle = Math.atan2(
+              mousePos.y - p2.position.y,
+              mousePos.x - p2.position.x
+            );
+            const projectileCount = weapon.projectileCount || 1;
+
+            for (let i = 0; i < projectileCount; i++) {
+              let projectileAngle = angle;
+              if (projectileCount > 1) {
+                const spread = weapon.type === 'spread' ? Math.PI / 3 : Math.PI / 6;
+                projectileAngle = angle - spread / 2 + (spread * i / (projectileCount - 1));
+              }
+
+              localPredictedProjectilesRef.current.push({
+                id: `local-p2-${nowMs}-${Math.random()}-${i}`,
+                position: { ...p2.position },
+                velocity: {
+                  x: Math.cos(projectileAngle) * weapon.projectileSpeed,
+                  y: Math.sin(projectileAngle) * weapon.projectileSpeed,
+                },
+                radius: 6,
+                color: PLAYER_COLORS[1],
+                lifeMs: 140,
+                maxLifeMs: 140,
+              });
+            }
+
+            localShotCooldownRef.current[cooldownKey] = nowMs;
+          });
+        }
+
+        if (localPredictedProjectilesRef.current.length > 0) {
+          const frameMs = deltaTime * 16.67;
+          localPredictedProjectilesRef.current = localPredictedProjectilesRef.current
+            .map(projectile => ({
+              ...projectile,
+              position: {
+                x: projectile.position.x + projectile.velocity.x * deltaTime,
+                y: projectile.position.y + projectile.velocity.y * deltaTime,
+              },
+              lifeMs: projectile.lifeMs - frameMs,
+            }))
+            .filter(projectile =>
+              projectile.lifeMs > 0 &&
+              projectile.position.x >= -20 &&
+              projectile.position.x <= dimensions.width + 20 &&
+              projectile.position.y >= -20 &&
+              projectile.position.y <= dimensions.height + 20
+            );
         }
 
         // Lerp enemy positions
@@ -1143,6 +1233,21 @@ export default function CoopGame({
       // Render
       if (gameStateRef.current) {
         renderGame(ctx, gameStateRef.current, dimensions.width, dimensions.height, timestamp);
+
+        if (!isHost && localPredictedProjectilesRef.current.length > 0) {
+          for (const projectile of localPredictedProjectilesRef.current) {
+            const lifeRatio = Math.max(0, projectile.lifeMs / projectile.maxLifeMs);
+            ctx.save();
+            ctx.globalAlpha = 0.25 + lifeRatio * 0.75;
+            ctx.fillStyle = projectile.color;
+            ctx.shadowBlur = 10;
+            ctx.shadowColor = projectile.color;
+            ctx.beginPath();
+            ctx.arc(projectile.position.x, projectile.position.y, projectile.radius, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.restore();
+          }
+        }
         
         // Render player 2 with octagonal border (same style as P1)
         if (player2Ref.current) {
