@@ -257,6 +257,31 @@ export default function Home() {
             </div>
           </div>
 
+          {/* Powerups Reference */}
+          <div className="w-full max-w-2xl mt-6 mb-6">
+            <div className="flex items-center gap-3 mb-4">
+              <span className="text-electric-green font-display text-2xl">★</span>
+              <div className="h-[1px] flex-1 bg-white/10" />
+              <span className="font-mono text-xs text-white/40 uppercase tracking-wider">Powerups</span>
+            </div>
+
+            <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+              {[
+                { icon: '❤', name: 'Health', desc: '+25 HP', color: 'text-green-400', border: 'border-green-400/30' },
+                { icon: '⚡', name: 'Speed', desc: '1.5x speed (10s)', color: 'text-yellow-300', border: 'border-yellow-300/30' },
+                { icon: '💥', name: 'Damage', desc: '1.5x damage (10s)', color: 'text-pink-400', border: 'border-pink-400/30' },
+                { icon: '🧲', name: 'Magnet', desc: '3x pickup range (15s)', color: 'text-purple-400', border: 'border-purple-400/30' },
+                { icon: '✨', name: 'XP Boost', desc: '+50 XP', color: 'text-cyan-400', border: 'border-cyan-400/30' },
+              ].map((p) => (
+                <div key={p.name} className={`p-3 border ${p.border} bg-brutal-dark text-center`}>
+                  <div className="text-xl mb-1">{p.icon}</div>
+                  <div className={`font-mono text-xs ${p.color}`}>{p.name}</div>
+                  <div className="font-mono text-[10px] text-white/40">{p.desc}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+
           {/* Footer */}
           <footer className="mt-auto pb-6 relative z-10 w-full max-w-2xl">
             <div className="h-[1px] bg-gradient-to-r from-transparent via-white/10 to-transparent mb-4" />

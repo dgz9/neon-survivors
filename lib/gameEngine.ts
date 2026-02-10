@@ -393,9 +393,22 @@ export function updateGameState(
   powerups = remainingPowerups;
   particles = [...particles, ...powerupParticles];
   
+  const levelBeforePowerups = player.level;
   collectedPowerups.forEach(powerup => {
     player = applyPowerup(player, powerup, currentTime);
   });
+
+  // Check if XP powerup caused a level up
+  if (player.level > levelBeforePowerups) {
+    const levelsGained = player.level - levelBeforePowerups;
+    state = {
+      ...state,
+      pendingLevelUps: state.pendingLevelUps + levelsGained,
+      availableUpgrades: state.availableUpgrades.length === 0 ? generateUpgrades(player) : state.availableUpgrades,
+      slowMoUntil: currentTime + 500,
+      slowMoFactor: 0.3,
+    };
+  }
   
   // Update buff timers and recalculate stats
   player = updatePlayerBuffs(player, currentTime);
