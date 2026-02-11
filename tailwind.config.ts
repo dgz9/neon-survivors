@@ -20,8 +20,8 @@ const config: Config = {
         'electric-orange': '#ff6b1a',
       },
       fontFamily: {
-        display: ['Orbitron', 'sans-serif'],
-        mono: ['JetBrains Mono', 'monospace'],
+        display: ['var(--font-display)', 'Orbitron', 'sans-serif'],
+        mono: ['var(--font-mono)', 'JetBrains Mono', 'monospace'],
       },
       animation: {
         'float': 'float 2s ease-in-out infinite',

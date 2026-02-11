@@ -1,6 +1,19 @@
 import './globals.css';
 import type { Metadata } from 'next';
+import { JetBrains_Mono, Orbitron } from 'next/font/google';
 import { Analytics } from '@vercel/analytics/react';
+
+const jetbrainsMono = JetBrains_Mono({
+  subsets: ['latin'],
+  variable: '--font-mono',
+  weight: ['400', '500', '600', '700'],
+});
+
+const orbitron = Orbitron({
+  subsets: ['latin'],
+  variable: '--font-display',
+  weight: ['400', '500', '600', '700', '800', '900'],
+});
 
 export const metadata: Metadata = {
   title: 'Neon Survivors - Arcade Survival Game',
@@ -18,15 +31,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en">
-      <head>
-        <link rel="preconnect" href="https://fonts.googleapis.com" />
-        <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
-        <link
-          href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Orbitron:wght@400;500;600;700;800;900&display=swap"
-          rel="stylesheet"
-        />
-      </head>
+    <html lang="en" className={`${jetbrainsMono.variable} ${orbitron.variable}`}>
       <body className="bg-brutal-black text-white antialiased overflow-x-hidden">
         {children}
         <Analytics />

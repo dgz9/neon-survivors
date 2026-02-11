@@ -56,6 +56,8 @@ export interface Enemy {
 export type EnemyType = 'chaser' | 'shooter' | 'tank' | 'swarm' | 'bomber' | 'boss' | 'zigzag' | 'splitter' | 'ghost' | 'magnet';
 
 export interface Projectile {
+  _active: boolean;
+  _poolIndex: number;
   id: string;
   position: Vector2;
   velocity: Vector2;
@@ -100,6 +102,8 @@ export interface PowerUp {
 export type PowerUpType = 'health' | 'speed' | 'damage' | 'magnet' | 'bomb' | 'xp';
 
 export interface ExperienceOrb {
+  _active: boolean;
+  _poolIndex: number;
   id: string;
   position: Vector2;
   value: number;
@@ -107,6 +111,8 @@ export interface ExperienceOrb {
 }
 
 export interface Particle {
+  _active: boolean;
+  _poolIndex: number;
   id: string;
   position: Vector2;
   velocity: Vector2;
@@ -133,9 +139,12 @@ export interface GameState {
   player: Player;
   enemies: Enemy[];
   projectiles: Projectile[];
+  projectileCount: number;
   powerups: PowerUp[];
   experienceOrbs: ExperienceOrb[];
+  experienceOrbCount: number;
   particles: Particle[];
+  particleCount: number;
   wave: number;
   score: number;
   multiplier: number;
@@ -152,6 +161,7 @@ export interface GameState {
   availableUpgrades: Upgrade[];
   waveAnnounceTime?: number;
   screenFlash?: number;
+  screenFlashColor?: string;
   slowMoUntil?: number;
   slowMoFactor?: number;
   // Stats tracking

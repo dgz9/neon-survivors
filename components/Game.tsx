@@ -1,19 +1,21 @@
 'use client';
 
 import { useEffect, useRef, useState, useCallback } from 'react';
-import { GameState, DEFAULT_CONFIG, Vector2, ArenaType } from '@/types/game';
+import { Canvas } from '@react-three/fiber';
+import { GameState, DEFAULT_CONFIG, Vector2, ArenaType, Upgrade } from '@/types/game';
 import {
   createInitialGameState,
   loadPlayerImage,
   startGame,
   updateGameState,
-  renderGame,
-  generateUpgrades,
   applyUpgrade,
 } from '@/lib/gameEngine';
-import { Upgrade } from '@/types/game';
-import { playShoot, playHit, playExplosion, playPickup, playLevelUp, playDamage, playWaveComplete, setMuted, isMuted } from '@/lib/audio';
-import { checkAchievements, Achievement, AchievementStats } from '@/lib/achievements';
+import { playShoot, playHit, playExplosion, playLevelUp, playDamage, playWaveComplete, setMuted } from '@/lib/audio';
+import { checkAchievements, AchievementStats } from '@/lib/achievements';
+import { GameScene } from './three/GameScene';
+import { TextParticles } from './three/TextParticles';
+import { PowerupSprites } from './three/PowerupSprites';
+import { HUD } from './three/HUD';
 
 interface GameOverStats {
   totalDamageDealt: number;
@@ -33,8 +35,7 @@ interface GameProps {
 }
 
 export default function Game({ playerImageUrl, playerName, arena = 'grid', onGameOver, onBack }: GameProps) {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const containerRef = useRef<HTMLDivElement>(null);
+  const gameAreaRef = useRef<HTMLDivElement>(null);
   const gameStateRef = useRef<GameState | null>(null);
   const animationFrameRef = useRef<number>(0);
   const lastTimeRef = useRef<number>(0);
@@ -53,15 +54,22 @@ export default function Game({ playerImageUrl, playerName, arena = 'grid', onGam
     health: number;
     maxHealth: number;
     level: number;
+    experience: number;
+    experienceToLevel: number;
     speedBonus: number;
     magnetBonus: number;
+    multiplier: number;
+    weapons: { type: string; level: number }[];
     activeBuffs: { type: string; remainingMs: number }[];
+    waveAnnounceTime?: number;
+    gameTime: number;
   } | null>(null);
   const [showUpgrades, setShowUpgrades] = useState(false);
   const [availableUpgrades, setAvailableUpgrades] = useState<Upgrade[]>([]);
   const [showPowerupLegend, setShowPowerupLegend] = useState(false);
   const [soundEnabled, setSoundEnabled] = useState(true);
-  const [achievementPopup, setAchievementPopup] = useState<Achievement | null>(null);
+  const [playerImage, setPlayerImage] = useState<HTMLImageElement | null>(null);
+
   const gamepadIndexRef = useRef<number | null>(null);
   const lastPausePress = useRef<number>(0);
   const lastWaveRef = useRef<number>(1);
@@ -72,8 +80,8 @@ export default function Game({ playerImageUrl, playerName, arena = 'grid', onGam
   // Handle resize
   useEffect(() => {
     const handleResize = () => {
-      if (containerRef.current) {
-        const rect = containerRef.current.getBoundingClientRect();
+      if (gameAreaRef.current) {
+        const rect = gameAreaRef.current.getBoundingClientRect();
         setDimensions({
           width: Math.floor(rect.width),
           height: Math.floor(rect.height),
@@ -89,12 +97,13 @@ export default function Game({ playerImageUrl, playerName, arena = 'grid', onGam
   // Initialize game
   const initGame = useCallback(async () => {
     setIsLoading(true);
-    
+
     let state = createInitialGameState(playerImageUrl, dimensions.width, dimensions.height, DEFAULT_CONFIG);
     state = { ...state, arena };
     state = await loadPlayerImage(state);
     state = startGame(state);
-    
+
+    setPlayerImage(state.player.image);
     gameStateRef.current = state;
     setIsLoading(false);
   }, [playerImageUrl, dimensions, arena]);
@@ -103,14 +112,13 @@ export default function Game({ playerImageUrl, playerName, arena = 'grid', onGam
     if (dimensions.width > 0 && dimensions.height > 0) {
       initGame();
     }
-  }, [initGame]);
+  }, [initGame, dimensions.width, dimensions.height]);
 
   // Handle upgrade selection
   const handleUpgrade = useCallback((upgrade: Upgrade) => {
     if (gameStateRef.current) {
       gameStateRef.current = applyUpgrade(gameStateRef.current, upgrade);
-      
-      // Check if more level ups pending
+
       if (gameStateRef.current.pendingLevelUps > 0) {
         setAvailableUpgrades(gameStateRef.current.availableUpgrades);
       } else {
@@ -125,7 +133,7 @@ export default function Game({ playerImageUrl, playerName, arena = 'grid', onGam
     const handleKeyDown = (e: KeyboardEvent) => {
       const key = e.key.toLowerCase();
       inputRef.current.keys.add(key);
-      
+
       if (key === 'escape') {
         setIsPaused(p => !p);
       }
@@ -136,15 +144,12 @@ export default function Game({ playerImageUrl, playerName, arena = 'grid', onGam
     };
 
     const handleMouseMove = (e: MouseEvent) => {
-      const canvas = canvasRef.current;
-      if (canvas) {
-        const rect = canvas.getBoundingClientRect();
-        // Scale mouse position to account for CSS scaling of canvas
-        const scaleX = canvas.width / rect.width;
-        const scaleY = canvas.height / rect.height;
+      const el = gameAreaRef.current;
+      if (el) {
+        const rect = el.getBoundingClientRect();
         inputRef.current.mousePos = {
-          x: (e.clientX - rect.left) * scaleX,
-          y: (e.clientY - rect.top) * scaleY,
+          x: e.clientX - rect.left,
+          y: e.clientY - rect.top,
         };
       }
     };
@@ -158,7 +163,6 @@ export default function Game({ playerImageUrl, playerName, arena = 'grid', onGam
     };
 
     const handleGamepadConnected = (e: GamepadEvent) => {
-      console.log('Gamepad connected:', e.gamepad.id);
       gamepadIndexRef.current = e.gamepad.index;
     };
 
@@ -176,7 +180,6 @@ export default function Game({ playerImageUrl, playerName, arena = 'grid', onGam
     window.addEventListener('gamepadconnected', handleGamepadConnected);
     window.addEventListener('gamepaddisconnected', handleGamepadDisconnected);
 
-    // Check for already connected gamepads
     const gamepads = navigator.getGamepads();
     for (const gp of gamepads) {
       if (gp) {
@@ -196,13 +199,9 @@ export default function Game({ playerImageUrl, playerName, arena = 'grid', onGam
     };
   }, []);
 
-  // Game loop
+  // Game loop — runs game logic only, no rendering (Three.js handles that)
   useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas || isLoading) return;
-
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
+    if (isLoading) return;
 
     const gameLoop = (timestamp: number) => {
       if (!gameStateRef.current) {
@@ -217,12 +216,10 @@ export default function Game({ playerImageUrl, playerName, arena = 'grid', onGam
       if (gamepadIndexRef.current !== null) {
         const gamepad = navigator.getGamepads()[gamepadIndexRef.current];
         if (gamepad) {
-          // Left stick for movement (axes 0 and 1)
           const deadzone = 0.15;
           const lx = Math.abs(gamepad.axes[0]) > deadzone ? gamepad.axes[0] : 0;
           const ly = Math.abs(gamepad.axes[1]) > deadzone ? gamepad.axes[1] : 0;
-          
-          // Map stick to WASD keys
+
           if (ly < -0.3) inputRef.current.keys.add('w');
           else inputRef.current.keys.delete('w');
           if (ly > 0.3) inputRef.current.keys.add('s');
@@ -231,13 +228,11 @@ export default function Game({ playerImageUrl, playerName, arena = 'grid', onGam
           else inputRef.current.keys.delete('a');
           if (lx > 0.3) inputRef.current.keys.add('d');
           else inputRef.current.keys.delete('d');
-          
-          // Right stick for aiming (axes 2 and 3)
+
           const rx = Math.abs(gamepad.axes[2]) > deadzone ? gamepad.axes[2] : 0;
           const ry = Math.abs(gamepad.axes[3]) > deadzone ? gamepad.axes[3] : 0;
-          
+
           if (Math.abs(rx) > deadzone || Math.abs(ry) > deadzone) {
-            // Convert right stick to mouse position relative to player
             if (gameStateRef.current) {
               const aimDistance = 200;
               inputRef.current.mousePos = {
@@ -246,8 +241,7 @@ export default function Game({ playerImageUrl, playerName, arena = 'grid', onGam
               };
             }
           }
-          
-          // Start button (button 9) to pause - with debounce
+
           if (gamepad.buttons[9]?.pressed && timestamp - lastPausePress.current > 300) {
             lastPausePress.current = timestamp;
             setIsPaused(p => !p);
@@ -265,21 +259,28 @@ export default function Game({ playerImageUrl, playerName, arena = 'grid', onGam
           DEFAULT_CONFIG
         );
 
-        // Update display state periodically
+        // Update display state periodically (~6x/sec)
         if (Math.floor(timestamp) % 100 < 17) {
+          const gs = gameStateRef.current;
           const now = Date.now();
           setDisplayState({
-            score: gameStateRef.current.score,
-            wave: gameStateRef.current.wave,
-            health: gameStateRef.current.player.health,
-            maxHealth: gameStateRef.current.player.maxHealth,
-            level: gameStateRef.current.player.level,
-            speedBonus: gameStateRef.current.player.speedBonus,
-            magnetBonus: gameStateRef.current.player.magnetBonus,
-            activeBuffs: gameStateRef.current.player.activeBuffs.map(b => ({
+            score: gs.score,
+            wave: gs.wave,
+            health: gs.player.health,
+            maxHealth: gs.player.maxHealth,
+            level: gs.player.level,
+            experience: gs.player.experience,
+            experienceToLevel: DEFAULT_CONFIG.experienceToLevel * gs.player.level,
+            speedBonus: gs.player.speedBonus,
+            magnetBonus: gs.player.magnetBonus,
+            multiplier: gs.multiplier,
+            weapons: gs.player.weapons.map(w => ({ type: w.type, level: w.level })),
+            activeBuffs: gs.player.activeBuffs.map(b => ({
               type: b.type,
               remainingMs: Math.max(0, b.expiresAt - now),
             })),
+            waveAnnounceTime: gs.waveAnnounceTime,
+            gameTime: gs.gameTime,
           });
         }
 
@@ -289,23 +290,20 @@ export default function Game({ playerImageUrl, playerName, arena = 'grid', onGam
           setAvailableUpgrades(gameStateRef.current.availableUpgrades);
           playLevelUp();
         }
-        
+
         // Sound effects
         const gs = gameStateRef.current;
-        
-        // Wave complete sound
+
         if (gs.wave > lastWaveRef.current) {
           lastWaveRef.current = gs.wave;
           playWaveComplete();
         }
-        
-        // Damage taken sound
+
         if (gs.player.health < lastHealthRef.current) {
           playDamage();
         }
         lastHealthRef.current = gs.player.health;
-        
-        // Kill sound (throttled)
+
         if (gs.player.kills > lastKillsRef.current) {
           const killDiff = gs.player.kills - lastKillsRef.current;
           if (killDiff > 0) {
@@ -314,9 +312,8 @@ export default function Game({ playerImageUrl, playerName, arena = 'grid', onGam
           }
         }
         lastKillsRef.current = gs.player.kills;
-        
-        // Shoot sound (heavily throttled)
-        if (gs.projectiles.length > 0 && timestamp - shootSoundThrottle.current > 150) {
+
+        if (gs.projectileCount > 0 && timestamp - shootSoundThrottle.current > 150) {
           shootSoundThrottle.current = timestamp;
           playShoot();
         }
@@ -325,8 +322,7 @@ export default function Game({ playerImageUrl, playerName, arena = 'grid', onGam
       // Check game over
       if (gameStateRef.current.isGameOver) {
         const gs = gameStateRef.current;
-        
-        // Check achievements
+
         const achStats: AchievementStats = {
           score: gs.score,
           wave: gs.wave,
@@ -340,7 +336,7 @@ export default function Game({ playerImageUrl, playerName, arena = 'grid', onGam
           noDamageTaken: gs.totalDamageTaken === 0,
         };
         const newAchievements = checkAchievements(achStats);
-        
+
         onGameOver(
           gs.score,
           gs.wave,
@@ -357,8 +353,6 @@ export default function Game({ playerImageUrl, playerName, arena = 'grid', onGam
         return;
       }
 
-      renderGame(ctx, gameStateRef.current, dimensions.width, dimensions.height, timestamp);
-
       animationFrameRef.current = requestAnimationFrame(gameLoop);
     };
 
@@ -371,10 +365,7 @@ export default function Game({ playerImageUrl, playerName, arena = 'grid', onGam
   }, [isLoading, isPaused, showUpgrades, dimensions, onGameOver]);
 
   return (
-    <div 
-      ref={containerRef}
-      className="fixed inset-0 bg-brutal-black flex flex-col"
-    >
+    <div className="fixed inset-0 bg-brutal-black flex flex-col">
       {/* Header */}
       <div className="h-12 flex items-center justify-between px-4 border-b border-white/10 bg-brutal-dark/80 backdrop-blur-sm z-10">
         <button
@@ -383,7 +374,7 @@ export default function Game({ playerImageUrl, playerName, arena = 'grid', onGam
         >
           {'<--'} EXIT
         </button>
-        
+
         <div className="font-display text-xl">
           {isLoading ? (
             <span className="text-white/40">Loading...</span>
@@ -404,20 +395,21 @@ export default function Game({ playerImageUrl, playerName, arena = 'grid', onGam
             }}
             className="font-mono text-xs uppercase tracking-wider text-white/40 hover:text-electric-cyan transition-colors"
           >
-            {soundEnabled ? '🔊' : '🔇'}
+            {soundEnabled ? '\uD83D\uDD0A' : '\uD83D\uDD07'}
           </button>
           <button
             onClick={() => setIsPaused(p => !p)}
             disabled={isLoading}
             className="font-mono text-xs uppercase tracking-wider text-white/40 hover:text-electric-cyan transition-colors disabled:opacity-30"
           >
-            {isPaused ? '▶ RESUME' : '|| PAUSE'}
+            {isPaused ? '\u25B6 RESUME' : '|| PAUSE'}
           </button>
         </div>
       </div>
 
-      {/* Game canvas */}
-      <div className="flex-1 relative overflow-hidden">
+      {/* Game area */}
+      <div ref={gameAreaRef} className="flex-1 relative overflow-hidden">
+        {/* Loading overlay */}
         {isLoading && (
           <div className="absolute inset-0 flex items-center justify-center bg-brutal-black z-20">
             <div className="text-center">
@@ -431,6 +423,7 @@ export default function Game({ playerImageUrl, playerName, arena = 'grid', onGam
           </div>
         )}
 
+        {/* Pause overlay */}
         {isPaused && !isLoading && !showUpgrades && (
           <div className="absolute inset-0 flex items-center justify-center bg-brutal-black/90 z-20">
             <div className="text-center">
@@ -456,6 +449,7 @@ export default function Game({ playerImageUrl, playerName, arena = 'grid', onGam
           </div>
         )}
 
+        {/* Upgrade overlay */}
         {showUpgrades && (
           <div className="absolute inset-0 flex items-center justify-center bg-brutal-black/95 z-30">
             <div className="text-center max-w-2xl w-full px-4">
@@ -465,7 +459,7 @@ export default function Game({ playerImageUrl, playerName, arena = 'grid', onGam
               <p className="font-mono text-sm text-white/60 mb-8">
                 Level {displayState?.level || 1} — Choose an upgrade
               </p>
-              
+
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 {availableUpgrades.map((upgrade) => (
                   <button
@@ -474,13 +468,13 @@ export default function Game({ playerImageUrl, playerName, arena = 'grid', onGam
                     className="group relative bg-brutal-dark border-2 border-white/20 hover:border-electric-cyan p-6 transition-all duration-200 hover:scale-105"
                     style={{ borderColor: `${upgrade.color}40` }}
                   >
-                    <div 
+                    <div
                       className="absolute inset-0 opacity-0 group-hover:opacity-20 transition-opacity"
                       style={{ backgroundColor: upgrade.color }}
                     />
                     <div className="relative z-10">
                       <div className="text-4xl mb-3">{upgrade.icon}</div>
-                      <div 
+                      <div
                         className="font-display text-xl mb-2"
                         style={{ color: upgrade.color }}
                       >
@@ -497,31 +491,39 @@ export default function Game({ playerImageUrl, playerName, arena = 'grid', onGam
           </div>
         )}
 
-        <canvas
-          ref={canvasRef}
-          width={dimensions.width}
-          height={dimensions.height}
-          className="w-full h-full"
-        />
+        {/* Three.js Canvas */}
+        {!isLoading && (
+          <Canvas
+            orthographic
+            camera={{ position: [0, 0, 100], near: 0.1, far: 1000 }}
+            gl={{ antialias: false, alpha: false }}
+            style={{ position: 'absolute', inset: 0, background: '#0a0a0a' }}
+          >
+            <GameScene gameStateRef={gameStateRef} playerImage={playerImage} />
+          </Canvas>
+        )}
+
+        {/* DOM overlays */}
+        <TextParticles gameStateRef={gameStateRef} />
+        <PowerupSprites gameStateRef={gameStateRef} />
+        <HUD displayState={displayState} />
 
         {/* Stats display - permanent bonuses and active buffs */}
         {displayState && !isLoading && (
-          <div className="absolute top-14 left-2 flex flex-col gap-1 text-xs font-mono z-10">
-            {/* Permanent stat bonuses */}
+          <div className="absolute top-2 left-2 flex flex-col gap-1 text-xs font-mono z-10 pointer-events-none">
             {displayState.speedBonus > 0 && (
               <div className="flex items-center gap-2 bg-brutal-dark/80 px-2 py-1 border border-electric-yellow/30">
-                <span>⚡</span>
+                <span>{'\u26A1'}</span>
                 <span className="text-electric-yellow">Speed +{Math.round(displayState.speedBonus / 0.5)}</span>
               </div>
             )}
             {displayState.magnetBonus > 0 && (
               <div className="flex items-center gap-2 bg-brutal-dark/80 px-2 py-1 border border-electric-purple/30">
-                <span>🧲</span>
+                <span>{'\uD83E\uDDF2'}</span>
                 <span className="text-electric-purple">Magnet +{Math.round(displayState.magnetBonus / 0.3)}</span>
               </div>
             )}
-            
-            {/* Active temporary buffs with timer bars */}
+
             {displayState.activeBuffs.map((buff) => {
               const maxDuration = buff.type === 'magnet' ? 15000 : 10000;
               const percent = (buff.remainingMs / maxDuration) * 100;
@@ -531,15 +533,15 @@ export default function Game({ playerImageUrl, playerName, arena = 'grid', onGam
                 magnet: 'bg-electric-purple',
               };
               const icons: Record<string, string> = {
-                speed: '⚡',
-                damage: '💥',
-                magnet: '🧲',
+                speed: '\u26A1',
+                damage: '\uD83D\uDCA5',
+                magnet: '\uD83E\uDDF2',
               };
               return (
                 <div key={buff.type} className="flex items-center gap-2 bg-brutal-dark/80 px-2 py-1 border border-white/20">
                   <span>{icons[buff.type]}</span>
                   <div className="w-16 h-2 bg-white/10 overflow-hidden">
-                    <div 
+                    <div
                       className={`h-full ${colors[buff.type]} transition-all duration-100`}
                       style={{ width: `${percent}%` }}
                     />
@@ -557,36 +559,12 @@ export default function Game({ playerImageUrl, playerName, arena = 'grid', onGam
         <div className="absolute bottom-16 left-4 bg-brutal-dark/95 border border-white/20 p-4 z-20 text-xs font-mono">
           <div className="text-white/60 uppercase tracking-wider mb-3">Powerups</div>
           <div className="space-y-2">
-            <div className="flex items-center gap-3">
-              <span className="text-lg">❤</span>
-              <span className="text-electric-green">Health</span>
-              <span className="text-white/40">+25 HP</span>
-            </div>
-            <div className="flex items-center gap-3">
-              <span className="text-lg">⚡</span>
-              <span className="text-electric-yellow">Speed</span>
-              <span className="text-white/40">+50% speed (temp)</span>
-            </div>
-            <div className="flex items-center gap-3">
-              <span className="text-lg">💥</span>
-              <span className="text-electric-pink">Damage</span>
-              <span className="text-white/40">+50% damage (temp)</span>
-            </div>
-            <div className="flex items-center gap-3">
-              <span className="text-lg">🧲</span>
-              <span className="text-electric-purple">Magnet</span>
-              <span className="text-white/40">Pulls XP orbs (temp)</span>
-            </div>
-            <div className="flex items-center gap-3">
-              <span className="text-lg">💣</span>
-              <span className="text-electric-orange">Bomb</span>
-              <span className="text-white/40">Clears nearby enemies</span>
-            </div>
-            <div className="flex items-center gap-3">
-              <span className="text-lg">✨</span>
-              <span className="text-electric-cyan">XP</span>
-              <span className="text-white/40">+50 experience</span>
-            </div>
+            <div className="flex items-center gap-3"><span className="text-lg">{'\u2764'}</span><span className="text-electric-green">Health</span><span className="text-white/40">+25 HP</span></div>
+            <div className="flex items-center gap-3"><span className="text-lg">{'\u26A1'}</span><span className="text-electric-yellow">Speed</span><span className="text-white/40">+50% speed (temp)</span></div>
+            <div className="flex items-center gap-3"><span className="text-lg">{'\uD83D\uDCA5'}</span><span className="text-electric-pink">Damage</span><span className="text-white/40">+50% damage (temp)</span></div>
+            <div className="flex items-center gap-3"><span className="text-lg">{'\uD83E\uDDF2'}</span><span className="text-electric-purple">Magnet</span><span className="text-white/40">Pulls XP orbs (temp)</span></div>
+            <div className="flex items-center gap-3"><span className="text-lg">{'\uD83D\uDCA3'}</span><span className="text-electric-orange">Bomb</span><span className="text-white/40">Clears nearby enemies</span></div>
+            <div className="flex items-center gap-3"><span className="text-lg">{'\u2728'}</span><span className="text-electric-cyan">XP</span><span className="text-white/40">+50 experience</span></div>
           </div>
         </div>
       )}
@@ -600,8 +578,8 @@ export default function Game({ playerImageUrl, playerName, arena = 'grid', onGam
           [?] Powerups
         </button>
         <div className="flex items-center gap-6">
-          <span>WASD / 🎮 Left Stick</span>
-          <span>Mouse / 🎮 Right Stick to aim</span>
+          <span>WASD / {'\uD83C\uDFAE'} Left Stick</span>
+          <span>Mouse / {'\uD83C\uDFAE'} Right Stick to aim</span>
           <span>Auto-fire</span>
           <span>ESC / Start to pause</span>
         </div>

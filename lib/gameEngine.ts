@@ -18,19 +18,31 @@ import {
   WeaponType,
   PowerUpType,
 } from '@/types/game';
+import { createParticlePool, createProjectilePool, createXPOrbPool } from './objectPool';
+import { SpatialGrid } from './spatialGrid';
+import { COLORS } from './colors';
 
-// Brutalist color palette
-const COLORS = {
-  black: '#0a0a0a',
-  dark: '#141414',
-  yellow: '#e4ff1a',
-  pink: '#ff2d6a',
-  cyan: '#00f0ff',
-  green: '#39ff14',
-  purple: '#bf5fff',
-  orange: '#ff6b1a',
-  white: '#fafafa',
-};
+// Pool singletons
+const particlePool = createParticlePool(1200);
+const projectilePool = createProjectilePool(200);
+const xpOrbPool = createXPOrbPool(150);
+
+// Spatial grid singleton
+let enemyGrid = new SpatialGrid(1920, 1080, 128);
+
+// Export pool helpers for CoopGame P2 projectile/orb management
+export function acquireProjectile(): Projectile {
+  return projectilePool.acquire();
+}
+export function getProjectileCount(): number {
+  return projectilePool.activeCount;
+}
+export function releaseXPOrb(orb: ExperienceOrb): void {
+  xpOrbPool.release(orb);
+}
+export function getXPOrbCount(): number {
+  return xpOrbPool.activeCount;
+}
 
 let nextId = 0;
 const generateId = () => `id-${nextId++}-${Math.random().toString(36).substr(2, 9)}`;
@@ -41,6 +53,14 @@ export function createInitialGameState(
   height: number,
   config: GameConfig = DEFAULT_CONFIG
 ): GameState {
+  // Clear all pools
+  particlePool.clear();
+  projectilePool.clear();
+  xpOrbPool.clear();
+
+  // Resize spatial grid if needed
+  enemyGrid.resize(width, height);
+
   const player: Player = {
     position: { x: width / 2, y: height / 2 },
     velocity: { x: 0, y: 0 },
@@ -71,10 +91,13 @@ export function createInitialGameState(
   return {
     player,
     enemies: [],
-    projectiles: [],
+    projectiles: projectilePool.items,
+    projectileCount: 0,
     powerups: [],
-    experienceOrbs: [],
-    particles: [],
+    experienceOrbs: xpOrbPool.items,
+    experienceOrbCount: 0,
+    particles: particlePool.items,
+    particleCount: 0,
     wave: 1,
     score: 0,
     multiplier: 1,
@@ -99,10 +122,10 @@ export function createInitialGameState(
 
 export async function loadPlayerImage(state: GameState): Promise<GameState> {
   if (!state.player.imageUrl) return state;
-  
+
   const image = new Image();
   image.crossOrigin = 'anonymous';
-  
+
   await new Promise<void>((resolve) => {
     image.onload = () => resolve();
     image.onerror = () => resolve();
@@ -142,52 +165,84 @@ export function updateGameState(
   }
 
   const currentTime = Date.now();
-  
+
+  // Resize spatial grid if dimensions changed
+  enemyGrid.resize(width, height);
+
   // Apply slow-mo effect
   let effectiveDelta = deltaTime;
   if (state.slowMoUntil && currentTime < state.slowMoUntil) {
     effectiveDelta *= state.slowMoFactor || 0.3;
   }
-  let { player, enemies, projectiles, powerups, experienceOrbs, particles, score, multiplier, multiplierTimer, screenShake, totalDamageDealt } = state;
+  let { player, enemies, powerups, score, multiplier, multiplierTimer, screenShake, totalDamageDealt } = state;
 
   // Update player position based on input
   const oldPos = { ...player.position };
   player = updatePlayer(player, input, width, height, config, effectiveDelta);
-  
+
   // Player movement trail particles
   const moveSpeed = Math.sqrt(player.velocity.x ** 2 + player.velocity.y ** 2);
   if (moveSpeed > 2) {
-    particles.push({
-      id: generateId(),
-      position: { ...oldPos },
-      velocity: { 
-        x: -player.velocity.x * 0.1 + (Math.random() - 0.5) * 0.5,
-        y: -player.velocity.y * 0.1 + (Math.random() - 0.5) * 0.5,
-      },
-      color: COLORS.cyan,
-      size: 3 + Math.random() * 2,
-      life: 150 + Math.random() * 100,
-      maxLife: 250,
-      type: 'spark',
-    });
+    const p = particlePool.acquire();
+    p.id = generateId();
+    p.position.x = oldPos.x;
+    p.position.y = oldPos.y;
+    p.velocity.x = -player.velocity.x * 0.1 + (Math.random() - 0.5) * 0.5;
+    p.velocity.y = -player.velocity.y * 0.1 + (Math.random() - 0.5) * 0.5;
+    p.color = COLORS.cyan;
+    p.size = 3 + Math.random() * 2;
+    p.life = 150 + Math.random() * 100;
+    p.maxLife = 250;
+    p.type = 'spark';
   }
 
-  // Fire weapons
-  const newProjectiles = fireWeapons(player, input.mousePos, currentTime);
-  projectiles = [...projectiles, ...newProjectiles];
+  // Fire weapons (acquires from projectile pool directly)
+  fireWeapons(player, input.mousePos, currentTime);
 
-  // Update projectiles
-  projectiles = projectiles
-    .map(p => updateProjectile(p, effectiveDelta, player.position))
-    .filter(p => isProjectileAlive(p, width, height));
+  // Update projectiles in-place and remove dead ones
+  projectilePool.forEach(proj => {
+    updateProjectileInPlace(proj, effectiveDelta, player.position);
+    if (!isProjectileAlive(proj, width, height)) return false; // release
 
-  // Check projectile-enemy collisions
-  const { updatedEnemies, updatedProjectiles, killedEnemies, damageParticles, damageDealt } = 
-    checkProjectileCollisions(enemies, projectiles, currentTime);
+    // Missile smoke trail
+    if (proj.weaponType === 'missile' && !proj.orbit) {
+      const tp = particlePool.acquire();
+      tp.id = generateId();
+      tp.position.x = proj.position.x - proj.velocity.x * 0.3 + (Math.random() - 0.5) * 4;
+      tp.position.y = proj.position.y - proj.velocity.y * 0.3 + (Math.random() - 0.5) * 4;
+      tp.velocity.x = -proj.velocity.x * 0.05 + (Math.random() - 0.5) * 1.5;
+      tp.velocity.y = -proj.velocity.y * 0.05 + (Math.random() - 0.5) * 1.5;
+      tp.color = COLORS.orange;
+      tp.size = 4 + Math.random() * 3;
+      tp.life = 200 + Math.random() * 100;
+      tp.maxLife = 300;
+      tp.type = 'explosion';
+
+      // Secondary grey smoke
+      if (Math.random() < 0.5) {
+        const sp = particlePool.acquire();
+        sp.id = generateId();
+        sp.position.x = proj.position.x - proj.velocity.x * 0.5 + (Math.random() - 0.5) * 6;
+        sp.position.y = proj.position.y - proj.velocity.y * 0.5 + (Math.random() - 0.5) * 6;
+        sp.velocity.x = (Math.random() - 0.5) * 0.8;
+        sp.velocity.y = (Math.random() - 0.5) * 0.8 - 0.5;
+        sp.color = '#888888';
+        sp.size = 5 + Math.random() * 4;
+        sp.life = 300 + Math.random() * 200;
+        sp.maxLife = 500;
+        sp.type = 'spark';
+      }
+    }
+
+    return true; // keep
+  });
+
+  // Check projectile-enemy collisions (uses spatial grid)
+  const { updatedEnemies, killedEnemies, damageDealt, missileShake: mShake } =
+    checkProjectileCollisions(enemies, currentTime);
   enemies = updatedEnemies;
-  projectiles = updatedProjectiles;
-  particles = [...particles, ...damageParticles];
   totalDamageDealt += damageDealt;
+  screenShake = Math.max(screenShake, mShake);
 
   // Process killed enemies
   killedEnemies.forEach(enemy => {
@@ -195,14 +250,14 @@ export function updateGameState(
     player.kills++;
     multiplier = Math.min(multiplier + 0.1, 10);
     multiplierTimer = currentTime + 3000;
-    
+
     // Spawn experience orb
-    experienceOrbs.push({
-      id: generateId(),
-      position: { ...enemy.position },
-      value: Math.floor(enemy.points / 2),
-      createdAt: currentTime,
-    });
+    const orb = xpOrbPool.acquire();
+    orb.id = generateId();
+    orb.position.x = enemy.position.x;
+    orb.position.y = enemy.position.y;
+    orb.value = Math.floor(enemy.points / 2);
+    orb.createdAt = currentTime;
 
     // Chance to spawn powerup
     if (Math.random() < config.powerupSpawnChance) {
@@ -236,41 +291,84 @@ export function updateGameState(
       }
     }
 
-    // Death particles - much more dramatic
-    particles = [...particles, ...createExplosion(enemy.position, enemy.color, 25 + enemy.radius)];
-    
-    // Add extra death effects for bigger enemies
+    // Death particles - scaled by enemy size
+    createExplosion(enemy.position, enemy.color, 25 + Math.floor(enemy.radius * 1.2));
+
+    // Expanding death ring for all enemies
+    const deathRp = particlePool.acquire();
+    deathRp.id = generateId();
+    deathRp.position.x = enemy.position.x;
+    deathRp.position.y = enemy.position.y;
+    deathRp.velocity.x = 0;
+    deathRp.velocity.y = 0;
+    deathRp.color = enemy.color;
+    deathRp.size = 15 + enemy.radius;
+    deathRp.life = 200;
+    deathRp.maxLife = 200;
+    deathRp.type = 'ring';
+
+    // Directional debris for all enemies (8 trails)
+    for (let i = 0; i < 8; i++) {
+      const angle = (i / 8) * Math.PI * 2 + Math.random() * 0.3;
+      const speed = 4 + Math.random() * 6;
+      const tp = particlePool.acquire();
+      tp.id = generateId();
+      tp.position.x = enemy.position.x;
+      tp.position.y = enemy.position.y;
+      tp.velocity.x = Math.cos(angle) * speed;
+      tp.velocity.y = Math.sin(angle) * speed;
+      tp.color = enemy.color;
+      tp.size = 8 + Math.random() * 4;
+      tp.life = 150 + Math.random() * 100;
+      tp.maxLife = 250;
+      tp.type = 'trail';
+    }
+
+    // Extra death effects for bigger enemies / bosses
     if (enemy.radius > 20 || enemy.type === 'boss') {
-      // Multiple expanding rings
       for (let i = 0; i < 3; i++) {
-        particles.push({
-          id: generateId(),
-          position: { ...enemy.position },
-          velocity: { x: 0, y: 0 },
-          color: enemy.color,
-          size: 30 + i * 20,
-          life: 250 + i * 50,
-          maxLife: 300 + i * 50,
-          type: 'ring',
-        });
+        const rp = particlePool.acquire();
+        rp.id = generateId();
+        rp.position.x = enemy.position.x;
+        rp.position.y = enemy.position.y;
+        rp.velocity.x = 0;
+        rp.velocity.y = 0;
+        rp.color = enemy.color;
+        rp.size = 30 + i * 25;
+        rp.life = 300 + i * 60;
+        rp.maxLife = 360 + i * 60;
+        rp.type = 'ring';
       }
-      
-      // Radial line burst
+
       for (let i = 0; i < 16; i++) {
         const angle = (i / 16) * Math.PI * 2;
-        particles.push({
-          id: generateId(),
-          position: { ...enemy.position },
-          velocity: {
-            x: Math.cos(angle) * 12,
-            y: Math.sin(angle) * 12,
-          },
-          color: enemy.color,
-          size: 15,
-          life: 180,
-          maxLife: 180,
-          type: 'trail',
-        });
+        const tp = particlePool.acquire();
+        tp.id = generateId();
+        tp.position.x = enemy.position.x;
+        tp.position.y = enemy.position.y;
+        tp.velocity.x = Math.cos(angle) * 12;
+        tp.velocity.y = Math.sin(angle) * 12;
+        tp.color = enemy.color;
+        tp.size = 15;
+        tp.life = 200;
+        tp.maxLife = 200;
+        tp.type = 'trail';
+      }
+
+      // White flash for big kills
+      for (let i = 0; i < 6; i++) {
+        const angle = Math.random() * Math.PI * 2;
+        const sp = particlePool.acquire();
+        sp.id = generateId();
+        sp.position.x = enemy.position.x;
+        sp.position.y = enemy.position.y;
+        sp.velocity.x = Math.cos(angle) * (8 + Math.random() * 4);
+        sp.velocity.y = Math.sin(angle) * (8 + Math.random() * 4);
+        sp.color = COLORS.white;
+        sp.size = 4 + Math.random() * 3;
+        sp.life = 150;
+        sp.maxLife = 150;
+        sp.type = 'spark';
       }
     }
   });
@@ -282,7 +380,7 @@ export function updateGameState(
     multiplier = Math.max(1, multiplier - 0.01 * deltaTime);
   }
 
-  // Update enemies - target closest player
+  // Update enemies
   enemies = enemies.map(e => updateEnemy(e, player, effectiveDelta, currentTime, player2));
 
   // Check enemy-player collision
@@ -294,62 +392,88 @@ export function updateGameState(
       invulnerableUntil: currentTime + 1000,
     };
     screenShake = 20;
-    state = { 
-      ...state, 
+    state = {
+      ...state,
       screenFlash: currentTime,
+      screenFlashColor: '255, 45, 106',
       totalDamageTaken: state.totalDamageTaken + collision.damage,
     };
-    
-    // Crash/damage particles - big impact effect
-    particles = [...particles, ...createExplosion(player.position, COLORS.pink, 35)];
-    
-    // Add radial crash lines
+
+    // Floating damage number - large and prominent
+    const dp = particlePool.acquire();
+    dp.id = generateId();
+    dp.position.x = player.position.x;
+    dp.position.y = player.position.y - 10;
+    dp.velocity.x = (Math.random() - 0.5) * 0.5;
+    dp.velocity.y = -2.5;
+    dp.color = COLORS.pink;
+    dp.size = 32;
+    dp.life = 1200;
+    dp.maxLife = 1200;
+    dp.type = 'text';
+    dp.text = `-${collision.damage} HP`;
+
+    // Secondary smaller damage echo for emphasis
+    const dp2 = particlePool.acquire();
+    dp2.id = generateId();
+    dp2.position.x = player.position.x + (Math.random() - 0.5) * 20;
+    dp2.position.y = player.position.y + 5;
+    dp2.velocity.x = (Math.random() - 0.5) * 3;
+    dp2.velocity.y = -2.5;
+    dp2.color = COLORS.orange;
+    dp2.size = 20;
+    dp2.life = 900;
+    dp2.maxLife = 900;
+    dp2.type = 'text';
+    dp2.text = `${Math.ceil(player.health - collision.damage)}`;  // Show remaining HP
+
+    // Crash/damage particles
+    createExplosion(player.position, COLORS.pink, 35);
+
+    // Radial crash lines
     for (let i = 0; i < 12; i++) {
       const angle = (i / 12) * Math.PI * 2;
-      particles.push({
-        id: generateId(),
-        position: { ...player.position },
-        velocity: {
-          x: Math.cos(angle) * 10,
-          y: Math.sin(angle) * 10,
-        },
-        color: COLORS.pink,
-        size: 20,
-        life: 200,
-        maxLife: 200,
-        type: 'trail',
-      });
+      const tp = particlePool.acquire();
+      tp.id = generateId();
+      tp.position.x = player.position.x;
+      tp.position.y = player.position.y;
+      tp.velocity.x = Math.cos(angle) * 10;
+      tp.velocity.y = Math.sin(angle) * 10;
+      tp.color = COLORS.pink;
+      tp.size = 20;
+      tp.life = 200;
+      tp.maxLife = 200;
+      tp.type = 'trail';
     }
-    
+
     // Expanding damage ring
-    particles.push({
-      id: generateId(),
-      position: { ...player.position },
-      velocity: { x: 0, y: 0 },
-      color: COLORS.pink,
-      size: 50,
-      life: 300,
-      maxLife: 300,
-      type: 'ring',
-    });
-    
+    const rp = particlePool.acquire();
+    rp.id = generateId();
+    rp.position.x = player.position.x;
+    rp.position.y = player.position.y;
+    rp.velocity.x = 0;
+    rp.velocity.y = 0;
+    rp.color = COLORS.pink;
+    rp.size = 50;
+    rp.life = 300;
+    rp.maxLife = 300;
+    rp.type = 'ring';
+
     // White flash particles
     for (let i = 0; i < 8; i++) {
       const angle = Math.random() * Math.PI * 2;
       const speed = 5 + Math.random() * 5;
-      particles.push({
-        id: generateId(),
-        position: { ...player.position },
-        velocity: {
-          x: Math.cos(angle) * speed,
-          y: Math.sin(angle) * speed,
-        },
-        color: COLORS.white,
-        size: 6,
-        life: 200,
-        maxLife: 200,
-        type: 'spark',
-      });
+      const sp = particlePool.acquire();
+      sp.id = generateId();
+      sp.position.x = player.position.x;
+      sp.position.y = player.position.y;
+      sp.velocity.x = Math.cos(angle) * speed;
+      sp.velocity.y = Math.sin(angle) * speed;
+      sp.color = COLORS.white;
+      sp.size = 6;
+      sp.life = 200;
+      sp.maxLife = 200;
+      sp.type = 'spark';
     }
   }
 
@@ -360,18 +484,19 @@ export function updateGameState(
       player,
       isGameOver: true,
       isRunning: false,
+      particleCount: particlePool.activeCount,
+      projectileCount: projectilePool.activeCount,
+      experienceOrbCount: xpOrbPool.activeCount,
     };
   }
 
   // Collect experience orbs
-  const { collectedXP, remainingOrbs } = collectExperienceOrbs(player, experienceOrbs, config);
-  experienceOrbs = remainingOrbs;
-  
+  const collectedXP = collectExperienceOrbs(player, config);
+
   if (collectedXP > 0) {
     const xpResult = addExperience(player, collectedXP, config);
     player = xpResult.player;
     if (xpResult.leveledUp) {
-      // Queue level up selection with slow-mo
       state = {
         ...state,
         pendingLevelUps: state.pendingLevelUps + 1,
@@ -381,20 +506,224 @@ export function updateGameState(
       };
     }
   }
-  
+
   // Track peak multiplier
   if (multiplier > state.peakMultiplier) {
     state = { ...state, peakMultiplier: multiplier };
   }
 
   // Collect powerups
-  const { collectedPowerups, remainingPowerups, powerupParticles } = 
+  const { collectedPowerups, remainingPowerups } =
     collectPowerups(player, powerups, currentTime);
   powerups = remainingPowerups;
-  particles = [...particles, ...powerupParticles];
-  
+
   const levelBeforePowerups = player.level;
   collectedPowerups.forEach(powerup => {
+    if (powerup.type === 'health') {
+      // Big healing text
+      const hp = particlePool.acquire();
+      hp.id = generateId();
+      hp.position.x = player.position.x;
+      hp.position.y = player.position.y - 10;
+      hp.velocity.x = (Math.random() - 0.5) * 0.5;
+      hp.velocity.y = -2.5;
+      hp.color = COLORS.green;
+      hp.size = 30;
+      hp.life = 1200;
+      hp.maxLife = 1200;
+      hp.type = 'text';
+      hp.text = '+25 HP';
+
+      // Green healing sparkles
+      for (let si = 0; si < 8; si++) {
+        const sparkAngle = (si / 8) * Math.PI * 2;
+        const sparkSpeed = 2 + Math.random() * 3;
+        const gp = particlePool.acquire();
+        gp.id = generateId();
+        gp.position.x = player.position.x + Math.cos(sparkAngle) * 15;
+        gp.position.y = player.position.y + Math.sin(sparkAngle) * 15;
+        gp.velocity.x = Math.cos(sparkAngle) * sparkSpeed;
+        gp.velocity.y = Math.sin(sparkAngle) * sparkSpeed - 2;
+        gp.color = COLORS.green;
+        gp.size = 3 + Math.random() * 2;
+        gp.life = 300 + Math.random() * 200;
+        gp.maxLife = 500;
+        gp.type = 'spark';
+      }
+
+      // Healing ring
+      const hr = particlePool.acquire();
+      hr.id = generateId();
+      hr.position.x = player.position.x;
+      hr.position.y = player.position.y;
+      hr.velocity.x = 0;
+      hr.velocity.y = 0;
+      hr.color = COLORS.green;
+      hr.size = 35;
+      hr.life = 250;
+      hr.maxLife = 250;
+      hr.type = 'ring';
+    }
+
+    // Floating text for other powerups too
+    if (powerup.type === 'speed' || powerup.type === 'damage' || powerup.type === 'magnet') {
+      const labels: Record<string, string> = { speed: 'SPEED UP', damage: 'DMG UP', magnet: 'MAGNET' };
+      const colors: Record<string, string> = { speed: COLORS.yellow, damage: COLORS.pink, magnet: COLORS.purple };
+      const bp = particlePool.acquire();
+      bp.id = generateId();
+      bp.position.x = player.position.x;
+      bp.position.y = player.position.y - 15;
+      bp.velocity.x = 0;
+      bp.velocity.y = -3.5;
+      bp.color = colors[powerup.type] || COLORS.white;
+      bp.size = 18;
+      bp.life = 800;
+      bp.maxLife = 800;
+      bp.type = 'text';
+      bp.text = labels[powerup.type] || powerup.type.toUpperCase();
+    }
+    if (powerup.type === 'xp') {
+      const xpp = particlePool.acquire();
+      xpp.id = generateId();
+      xpp.position.x = player.position.x;
+      xpp.position.y = player.position.y - 15;
+      xpp.velocity.x = 0;
+      xpp.velocity.y = -3.5;
+      xpp.color = COLORS.cyan;
+      xpp.size = 18;
+      xpp.life = 800;
+      xpp.maxLife = 800;
+      xpp.type = 'text';
+      xpp.text = '+50 XP';
+    }
+    if (powerup.type === 'bomb') {
+      const bombRadius = 350;
+      const bombRadiusSq = bombRadius * bombRadius;
+      let bombKills = 0;
+
+      // Kill all enemies within radius
+      const survivingEnemies: Enemy[] = [];
+      enemies.forEach(enemy => {
+        const dx = enemy.position.x - player.position.x;
+        const dy = enemy.position.y - player.position.y;
+        const distSq = dx * dx + dy * dy;
+        if (distSq < bombRadiusSq) {
+          // Kill this enemy
+          score += enemy.points * multiplier;
+          player.kills++;
+          bombKills++;
+          multiplier = Math.min(multiplier + 0.1, 10);
+          multiplierTimer = currentTime + 3000;
+
+          // Spawn XP orb
+          const orb = xpOrbPool.acquire();
+          orb.id = generateId();
+          orb.position.x = enemy.position.x;
+          orb.position.y = enemy.position.y;
+          orb.value = Math.floor(enemy.points / 2);
+          orb.createdAt = currentTime;
+
+          // Death explosion per enemy
+          createExplosion(enemy.position, enemy.color, 15);
+          const dr = particlePool.acquire();
+          dr.id = generateId();
+          dr.position.x = enemy.position.x;
+          dr.position.y = enemy.position.y;
+          dr.velocity.x = 0;
+          dr.velocity.y = 0;
+          dr.color = enemy.color;
+          dr.size = 15 + enemy.radius;
+          dr.life = 200;
+          dr.maxLife = 200;
+          dr.type = 'ring';
+        } else {
+          survivingEnemies.push(enemy);
+        }
+      });
+      enemies = survivingEnemies;
+      state = { ...state, enemiesKilledThisWave: state.enemiesKilledThisWave + bombKills };
+
+      // Shockwave rings (orange, yellow, white)
+      const ringColors = [COLORS.orange, COLORS.yellow, COLORS.white];
+      const ringSizes = [bombRadius * 0.8, bombRadius * 0.55, bombRadius * 0.35];
+      const ringLives = [500, 400, 300];
+      for (let ri = 0; ri < 3; ri++) {
+        const sr = particlePool.acquire();
+        sr.id = generateId();
+        sr.position.x = player.position.x;
+        sr.position.y = player.position.y;
+        sr.velocity.x = 0;
+        sr.velocity.y = 0;
+        sr.color = ringColors[ri];
+        sr.size = ringSizes[ri];
+        sr.life = ringLives[ri];
+        sr.maxLife = ringLives[ri];
+        sr.type = 'ring';
+      }
+
+      // Fire/debris particles radiating outward
+      for (let fi = 0; fi < 45; fi++) {
+        const angle = (fi / 45) * Math.PI * 2 + Math.random() * 0.3;
+        const speed = 4 + Math.random() * 8;
+        const fp = particlePool.acquire();
+        fp.id = generateId();
+        fp.position.x = player.position.x + (Math.random() - 0.5) * 10;
+        fp.position.y = player.position.y + (Math.random() - 0.5) * 10;
+        fp.velocity.x = Math.cos(angle) * speed;
+        fp.velocity.y = Math.sin(angle) * speed;
+        fp.color = fi % 3 === 0 ? COLORS.yellow : fi % 3 === 1 ? COLORS.orange : COLORS.white;
+        fp.size = 4 + Math.random() * 5;
+        fp.life = 300 + Math.random() * 200;
+        fp.maxLife = 500;
+        fp.type = fi % 4 === 0 ? 'trail' : 'explosion';
+      }
+
+      // Bright white center flash
+      const cf = particlePool.acquire();
+      cf.id = generateId();
+      cf.position.x = player.position.x;
+      cf.position.y = player.position.y;
+      cf.velocity.x = 0;
+      cf.velocity.y = 0;
+      cf.color = COLORS.white;
+      cf.size = bombRadius * 0.3;
+      cf.life = 150;
+      cf.maxLife = 150;
+      cf.type = 'ring';
+
+      // "BOMB!" text - bright yellow-green to feel positive
+      const bt = particlePool.acquire();
+      bt.id = generateId();
+      bt.position.x = player.position.x;
+      bt.position.y = player.position.y - 25;
+      bt.velocity.x = 0;
+      bt.velocity.y = -2;
+      bt.color = COLORS.yellow;
+      bt.size = 34;
+      bt.life = 1400;
+      bt.maxLife = 1400;
+      bt.type = 'text';
+      bt.text = 'BOMB!';
+
+      // Kill count text
+      if (bombKills > 0) {
+        const kt = particlePool.acquire();
+        kt.id = generateId();
+        kt.position.x = player.position.x;
+        kt.position.y = player.position.y + 15;
+        kt.velocity.x = 0;
+        kt.velocity.y = -1.5;
+        kt.color = COLORS.green;
+        kt.size = 24;
+        kt.life = 1200;
+        kt.maxLife = 1200;
+        kt.type = 'text';
+        kt.text = `x${bombKills} KILLS`;
+      }
+
+      screenShake = 30;
+      state = { ...state, screenFlash: currentTime, screenFlashColor: '228, 255, 26' };
+    }
     player = applyPowerup(player, powerup, currentTime);
   });
 
@@ -409,14 +738,13 @@ export function updateGameState(
       slowMoFactor: 0.3,
     };
   }
-  
+
   // Update buff timers and recalculate stats
   player = updatePlayerBuffs(player, currentTime);
 
-  // Spawn enemies - more frequent and in groups as waves progress
+  // Spawn enemies
   const spawnInterval = config.enemySpawnRate / (1 + state.wave * 0.2);
   if (currentTime - state.lastEnemySpawn > spawnInterval) {
-    // Spawn multiple enemies at higher waves
     const spawnCount = Math.min(1 + Math.floor(state.wave / 3), 5);
     for (let i = 0; i < spawnCount; i++) {
       const newEnemy = spawnEnemy(state.wave, width, height, player.position);
@@ -435,36 +763,44 @@ export function updateGameState(
       enemiesRequiredForWave: Math.floor(state.enemiesRequiredForWave * 1.2),
       waveAnnounceTime: currentTime,
     };
-    
+
     // Wave celebration particles
     for (let i = 0; i < 30; i++) {
       const angle = Math.random() * Math.PI * 2;
       const speed = 3 + Math.random() * 5;
-      particles.push({
-        id: generateId(),
-        position: { x: width / 2, y: height / 2 },
-        velocity: {
-          x: Math.cos(angle) * speed,
-          y: Math.sin(angle) * speed,
-        },
-        color: [COLORS.cyan, COLORS.yellow, COLORS.pink][Math.floor(Math.random() * 3)],
-        size: 4 + Math.random() * 3,
-        life: 400 + Math.random() * 200,
-        maxLife: 600,
-        type: 'spark',
-      });
+      const cp = particlePool.acquire();
+      cp.id = generateId();
+      cp.position.x = width / 2;
+      cp.position.y = height / 2;
+      cp.velocity.x = Math.cos(angle) * speed;
+      cp.velocity.y = Math.sin(angle) * speed;
+      cp.color = [COLORS.cyan, COLORS.yellow, COLORS.pink][Math.floor(Math.random() * 3)];
+      cp.size = 4 + Math.random() * 3;
+      cp.life = 400 + Math.random() * 200;
+      cp.maxLife = 600;
+      cp.type = 'spark';
     }
-    
+
     // Spawn boss every 5 waves
     if (newWave % 5 === 0) {
       enemies.push(spawnBoss(width, height, player.position));
     }
   }
 
-  // Update particles
-  particles = particles
-    .map(p => updateParticle(p, effectiveDelta))
-    .filter(p => p.life > 0);
+  // Update particles in-place and release dead ones
+  particlePool.forEach(p => {
+    // In-place update
+    const newLife = p.life - effectiveDelta * 16;
+    const lifeRatio = Math.max(0, newLife / p.maxLife);
+    p.position.x += p.velocity.x * effectiveDelta * 0.1;
+    p.position.y += p.velocity.y * effectiveDelta * 0.1;
+    p.velocity.x *= 0.98;
+    p.velocity.y *= 0.98;
+    p.life = newLife;
+    p.size = Math.max(0.1, p.size * lifeRatio);
+    if (p.life <= 0) return false; // release
+    return true; // keep
+  });
 
   // Decay screen shake
   screenShake = Math.max(0, screenShake - deltaTime * 0.5);
@@ -473,10 +809,13 @@ export function updateGameState(
     ...state,
     player,
     enemies,
-    projectiles,
+    projectiles: projectilePool.items,
+    projectileCount: projectilePool.activeCount,
     powerups,
-    experienceOrbs,
-    particles,
+    experienceOrbs: xpOrbPool.items,
+    experienceOrbCount: xpOrbPool.activeCount,
+    particles: particlePool.items,
+    particleCount: particlePool.activeCount,
     score,
     multiplier,
     multiplierTimer,
@@ -493,7 +832,6 @@ function updatePlayer(
   config: GameConfig,
   deltaTime: number
 ): Player {
-  // Target velocity based on input
   let targetVx = 0;
   let targetVy = 0;
 
@@ -502,22 +840,19 @@ function updatePlayer(
   if (input.keys.has('a') || input.keys.has('arrowleft')) targetVx -= 1;
   if (input.keys.has('d') || input.keys.has('arrowright')) targetVx += 1;
 
-  // Normalize diagonal movement
   const length = Math.sqrt(targetVx * targetVx + targetVy * targetVy);
   if (length > 0) {
     targetVx = (targetVx / length) * player.speed;
     targetVy = (targetVy / length) * player.speed;
   }
 
-  // Smooth acceleration/deceleration for responsive but smooth movement
-  const acceleration = 0.25; // How fast we reach target velocity (0-1, higher = snappier)
+  const acceleration = 0.25;
   const vx = player.velocity.x + (targetVx - player.velocity.x) * acceleration;
   const vy = player.velocity.y + (targetVy - player.velocity.y) * acceleration;
 
   let newX = player.position.x + vx * deltaTime;
   let newY = player.position.y + vy * deltaTime;
 
-  // Keep player in bounds with smooth bounce-back
   const margin = player.radius;
   if (newX < margin) { newX = margin; }
   if (newX > width - margin) { newX = width - margin; }
@@ -531,10 +866,7 @@ function updatePlayer(
   };
 }
 
-function fireWeapons(player: Player, mousePos: Vector2, currentTime: number): Projectile[] {
-  const projectiles: Projectile[] = [];
-  
-  // Check for damage buff
+function fireWeapons(player: Player, mousePos: Vector2, currentTime: number): void {
   const damageBuff = player.activeBuffs.find(b => b.type === 'damage');
   const damageMultiplier = damageBuff ? damageBuff.multiplier : 1;
 
@@ -544,27 +876,29 @@ function fireWeapons(player: Player, mousePos: Vector2, currentTime: number): Pr
 
     const config = WEAPON_CONFIGS[weapon.type];
 
-    // Orbit weapon creates orbs that circle around player
     if (weapon.type === 'orbit') {
-      for (let i = 0; i < weapon.projectileCount + weapon.level - 1; i++) {
-        const orbitAngle = (i / (weapon.projectileCount + weapon.level - 1)) * Math.PI * 2;
-        projectiles.push({
-          id: generateId(),
-          position: { ...player.position },
-          velocity: { x: 0, y: 0 },
-          radius: 10 + weapon.level * 2,
-          color: config.color,
-          damage: weapon.damage * (1 + (weapon.level - 1) * 0.3) * damageMultiplier,
-          isEnemy: false,
-          piercing: 999,
-          hitEnemies: new Set(),
-          orbit: {
-            angle: orbitAngle,
-            radius: 60 + weapon.level * 10,
-            speed: 0.05 + weapon.level * 0.01,
-            owner: player.position,
-          },
-        } as Projectile);
+      // Cap orbit count to prevent invincibility at high levels
+      const orbitCount = Math.min(6, weapon.projectileCount + weapon.level - 1);
+      for (let i = 0; i < orbitCount; i++) {
+        const orbitAngle = (i / orbitCount) * Math.PI * 2;
+        const p = projectilePool.acquire();
+        p.id = generateId();
+        p.position.x = player.position.x;
+        p.position.y = player.position.y;
+        p.velocity.x = 0;
+        p.velocity.y = 0;
+        p.radius = 8 + weapon.level;
+        p.color = config.color;
+        p.damage = weapon.damage * (1 + (weapon.level - 1) * 0.2) * damageMultiplier;
+        p.isEnemy = false;
+        p.piercing = 999;
+        p.orbit = {
+          angle: orbitAngle,
+          radius: 55 + weapon.level * 8,
+          speed: 0.04 + weapon.level * 0.008,
+          owner: player.position,
+        };
+        p.weaponType = 'orbit';
       }
       return;
     }
@@ -573,71 +907,51 @@ function fireWeapons(player: Player, mousePos: Vector2, currentTime: number): Pr
       mousePos.y - player.position.y,
       mousePos.x - player.position.x
     );
-    
+
     for (let i = 0; i < weapon.projectileCount; i++) {
       let projectileAngle = angle;
-      
+
       if (weapon.projectileCount > 1) {
         const spread = weapon.type === 'spread' ? Math.PI / 3 : Math.PI / 6;
         projectileAngle = angle - spread / 2 + (spread * i / (weapon.projectileCount - 1));
       }
 
-      projectiles.push({
-        id: generateId(),
-        position: { ...player.position },
-        velocity: {
-          x: Math.cos(projectileAngle) * weapon.projectileSpeed,
-          y: Math.sin(projectileAngle) * weapon.projectileSpeed,
-        },
-        radius: weapon.type === 'missile' ? 10 : 6,
-        color: config.color,
-        damage: weapon.damage * (1 + (weapon.level - 1) * 0.2) * damageMultiplier,
-        isEnemy: false,
-        piercing: weapon.piercing,
-        hitEnemies: new Set(),
-        weaponType: weapon.type,
-        explosionRadius: weapon.type === 'missile' ? 80 + weapon.level * 20 : undefined,
-      });
+      const p = projectilePool.acquire();
+      p.id = generateId();
+      p.position.x = player.position.x;
+      p.position.y = player.position.y;
+      p.velocity.x = Math.cos(projectileAngle) * weapon.projectileSpeed;
+      p.velocity.y = Math.sin(projectileAngle) * weapon.projectileSpeed;
+      p.radius = weapon.type === 'missile' ? 10 : 6;
+      p.color = config.color;
+      p.damage = weapon.damage * (1 + (weapon.level - 1) * 0.2) * damageMultiplier;
+      p.isEnemy = false;
+      p.piercing = weapon.piercing;
+      p.weaponType = weapon.type;
+      p.explosionRadius = weapon.type === 'missile' ? 80 + weapon.level * 20 : undefined;
     }
   });
-
-  return projectiles;
 }
 
-function updateProjectile(projectile: Projectile, deltaTime: number, playerPos: Vector2): Projectile {
-  // Handle orbiting projectiles
+function updateProjectileInPlace(projectile: Projectile, deltaTime: number, playerPos: Vector2): void {
   if (projectile.orbit) {
-    const newAngle = projectile.orbit.angle + projectile.orbit.speed * deltaTime;
-    return {
-      ...projectile,
-      position: {
-        x: playerPos.x + Math.cos(newAngle) * projectile.orbit.radius,
-        y: playerPos.y + Math.sin(newAngle) * projectile.orbit.radius,
-      },
-      orbit: {
-        ...projectile.orbit,
-        angle: newAngle,
-        owner: playerPos,
-      },
-      lifetime: (projectile.lifetime || 3000) - deltaTime * 16,
-    };
+    projectile.orbit.angle += projectile.orbit.speed * deltaTime;
+    projectile.position.x = playerPos.x + Math.cos(projectile.orbit.angle) * projectile.orbit.radius;
+    projectile.position.y = playerPos.y + Math.sin(projectile.orbit.angle) * projectile.orbit.radius;
+    projectile.orbit.owner = playerPos;
+    projectile.lifetime = (projectile.lifetime || 3000) - deltaTime * 16;
+    return;
   }
 
-  return {
-    ...projectile,
-    position: {
-      x: projectile.position.x + projectile.velocity.x * deltaTime,
-      y: projectile.position.y + projectile.velocity.y * deltaTime,
-    },
-  };
+  projectile.position.x += projectile.velocity.x * deltaTime;
+  projectile.position.y += projectile.velocity.y * deltaTime;
 }
 
 function isProjectileAlive(projectile: Projectile, width: number, height: number): boolean {
-  // Orbiting projectiles expire based on lifetime
   if (projectile.orbit) {
     return (projectile.lifetime || 0) > 0;
   }
-  
+
   const { x, y } = projectile.position;
   const margin = 50;
   return x > -margin && x < width + margin && y > -margin && y < height + margin;
@@ -645,223 +959,296 @@ function isProjectileAlive(projectile: Projectile, width: number, height: number
 
 function checkProjectileCollisions(
   enemies: Enemy[],
-  projectiles: Projectile[],
   currentTime: number
 ): {
   updatedEnemies: Enemy[];
-  updatedProjectiles: Projectile[];
   killedEnemies: Enemy[];
-  damageParticles: Particle[];
   damageDealt: number;
+  missileShake: number;
 } {
   const killedEnemies: Enemy[] = [];
-  const damageParticles: Particle[] = [];
-  let updatedProjectiles = [...projectiles];
+  const killedEnemyIds = new Set<string>();
   let updatedEnemies = [...enemies];
   let damageDealt = 0;
+  let missileShake = 0;
 
-  updatedProjectiles = updatedProjectiles.filter(projectile => {
-    if (projectile.isEnemy) return true;
+  // Build spatial grid for enemies
+  enemyGrid.clear();
+  for (let i = 0; i < updatedEnemies.length; i++) {
+    enemyGrid.insert(i, updatedEnemies[i].position.x, updatedEnemies[i].position.y);
+  }
 
-    for (let i = 0; i < updatedEnemies.length; i++) {
-      const enemy = updatedEnemies[i];
-      if (projectile.hitEnemies.has(enemy.id)) continue;
+  projectilePool.forEach(projectile => {
+    if (projectile.isEnemy) return true; // keep
+
+    // Query nearby enemies via spatial grid
+    let shouldRemove = false;
+    enemyGrid.query(projectile.position.x, projectile.position.y, (enemyIdx) => {
+      if (shouldRemove) return;
+      if (enemyIdx >= updatedEnemies.length) return;
+      const enemy = updatedEnemies[enemyIdx];
+      if (!enemy || killedEnemyIds.has(enemy.id)) return;
+      if (projectile.hitEnemies.has(enemy.id)) return;
 
       const dx = enemy.position.x - projectile.position.x;
       const dy = enemy.position.y - projectile.position.y;
-      const distance = Math.sqrt(dx * dx + dy * dy);
+      const distSq = dx * dx + dy * dy;
+      const radiiSum = enemy.radius + projectile.radius;
 
-      if (distance < enemy.radius + projectile.radius) {
+      if (distSq < radiiSum * radiiSum) {
         // Hit!
         projectile.hitEnemies.add(enemy.id);
         enemy.health -= projectile.damage;
-
-        // Track damage dealt
         damageDealt += projectile.damage;
 
-        // Create damage number particle
-        damageParticles.push({
-          id: generateId(),
-          position: { ...projectile.position },
-          velocity: { x: (Math.random() - 0.5) * 2, y: -3 },
-          color: COLORS.white,
-          size: 10,
-          life: 400,
-          maxLife: 400,
-          type: 'text',
-          text: Math.floor(projectile.damage).toString(),
-        });
+        // Damage number particle
+        const dp = particlePool.acquire();
+        dp.id = generateId();
+        dp.position.x = projectile.position.x + (Math.random() - 0.5) * 8;
+        dp.position.y = projectile.position.y - 5;
+        dp.velocity.x = (Math.random() - 0.5) * 2.5;
+        dp.velocity.y = -3.5;
+        dp.color = COLORS.yellow;
+        dp.size = 16;
+        dp.life = 550;
+        dp.maxLife = 550;
+        dp.type = 'text';
+        dp.text = Math.floor(projectile.damage).toString();
 
-        // Create hit spark particles - more of them!
-        for (let i = 0; i < 10; i++) {
+        // Hit spark particles
+        for (let j = 0; j < 10; j++) {
           const sparkAngle = Math.random() * Math.PI * 2;
           const sparkSpeed = 3 + Math.random() * 5;
-          damageParticles.push({
-            id: generateId(),
-            position: { 
-              x: projectile.position.x + (Math.random() - 0.5) * 10,
-              y: projectile.position.y + (Math.random() - 0.5) * 10,
-            },
-            velocity: {
-              x: Math.cos(sparkAngle) * sparkSpeed,
-              y: Math.sin(sparkAngle) * sparkSpeed,
-            },
-            color: projectile.color,
-            size: 2 + Math.random() * 3,
-            life: 200 + Math.random() * 150,
-            maxLife: 350,
-            type: 'spark',
-          });
+          const sp = particlePool.acquire();
+          sp.id = generateId();
+          sp.position.x = projectile.position.x + (Math.random() - 0.5) * 10;
+          sp.position.y = projectile.position.y + (Math.random() - 0.5) * 10;
+          sp.velocity.x = Math.cos(sparkAngle) * sparkSpeed;
+          sp.velocity.y = Math.sin(sparkAngle) * sparkSpeed;
+          sp.color = projectile.color;
+          sp.size = 2 + Math.random() * 3;
+          sp.life = 200 + Math.random() * 150;
+          sp.maxLife = 350;
+          sp.type = 'spark';
         }
-        
-        // Add enemy color sparks too
-        for (let i = 0; i < 6; i++) {
+
+        // Enemy color sparks
+        for (let j = 0; j < 6; j++) {
           const sparkAngle = Math.random() * Math.PI * 2;
           const sparkSpeed = 2 + Math.random() * 4;
-          damageParticles.push({
-            id: generateId(),
-            position: { ...projectile.position },
-            velocity: {
-              x: Math.cos(sparkAngle) * sparkSpeed,
-              y: Math.sin(sparkAngle) * sparkSpeed,
-            },
-            color: enemy.color,
-            size: 3 + Math.random() * 2,
-            life: 180 + Math.random() * 120,
-            maxLife: 300,
-            type: 'explosion',
-          });
+          const ep = particlePool.acquire();
+          ep.id = generateId();
+          ep.position.x = projectile.position.x;
+          ep.position.y = projectile.position.y;
+          ep.velocity.x = Math.cos(sparkAngle) * sparkSpeed;
+          ep.velocity.y = Math.sin(sparkAngle) * sparkSpeed;
+          ep.color = enemy.color;
+          ep.size = 3 + Math.random() * 2;
+          ep.life = 180 + Math.random() * 120;
+          ep.maxLife = 300;
+          ep.type = 'explosion';
         }
 
         // Impact ring
-        damageParticles.push({
-          id: generateId(),
-          position: { ...projectile.position },
-          velocity: { x: 0, y: 0 },
-          color: projectile.color,
-          size: 20,
-          life: 180,
-          maxLife: 180,
-          type: 'ring',
-        });
-        
-        // Secondary smaller ring
-        damageParticles.push({
-          id: generateId(),
-          position: { ...projectile.position },
-          velocity: { x: 0, y: 0 },
-          color: enemy.color,
-          size: 12,
-          life: 120,
-          maxLife: 120,
-          type: 'ring',
-        });
+        const ir = particlePool.acquire();
+        ir.id = generateId();
+        ir.position.x = projectile.position.x;
+        ir.position.y = projectile.position.y;
+        ir.velocity.x = 0;
+        ir.velocity.y = 0;
+        ir.color = projectile.color;
+        ir.size = 20;
+        ir.life = 180;
+        ir.maxLife = 180;
+        ir.type = 'ring';
 
-        // Missile explosion - damage all enemies in radius
+        // Secondary ring
+        const sr = particlePool.acquire();
+        sr.id = generateId();
+        sr.position.x = projectile.position.x;
+        sr.position.y = projectile.position.y;
+        sr.velocity.x = 0;
+        sr.velocity.y = 0;
+        sr.color = enemy.color;
+        sr.size = 12;
+        sr.life = 120;
+        sr.maxLife = 120;
+        sr.type = 'ring';
+
+        // Missile explosion - dramatic multi-layer effect
         if (projectile.weaponType === 'missile' && projectile.explosionRadius) {
           const explosionRadius = projectile.explosionRadius;
-          
-          // Create big explosion visual
-          for (let i = 0; i < 20; i++) {
-            const expAngle = (i / 20) * Math.PI * 2;
-            const expSpeed = 3 + Math.random() * 5;
-            damageParticles.push({
-              id: generateId(),
-              position: { ...projectile.position },
-              velocity: {
-                x: Math.cos(expAngle) * expSpeed,
-                y: Math.sin(expAngle) * expSpeed,
-              },
-              color: COLORS.orange,
-              size: 6 + Math.random() * 4,
-              life: 300 + Math.random() * 200,
-              maxLife: 500,
-              type: 'explosion',
-            });
+          const explosionRadiusSq = explosionRadius * explosionRadius;
+          missileShake += 18;
+
+          // Bright center flash
+          const flash = particlePool.acquire();
+          flash.id = generateId();
+          flash.position.x = projectile.position.x;
+          flash.position.y = projectile.position.y;
+          flash.velocity.x = 0;
+          flash.velocity.y = 0;
+          flash.color = COLORS.white;
+          flash.size = explosionRadius * 0.4;
+          flash.life = 120;
+          flash.maxLife = 120;
+          flash.type = 'ring';
+
+          // Inner fire burst (orange/yellow)
+          for (let j = 0; j < 30; j++) {
+            const expAngle = (j / 30) * Math.PI * 2 + Math.random() * 0.3;
+            const expSpeed = 2 + Math.random() * 6;
+            const xp = particlePool.acquire();
+            xp.id = generateId();
+            xp.position.x = projectile.position.x + (Math.random() - 0.5) * 12;
+            xp.position.y = projectile.position.y + (Math.random() - 0.5) * 12;
+            xp.velocity.x = Math.cos(expAngle) * expSpeed;
+            xp.velocity.y = Math.sin(expAngle) * expSpeed;
+            xp.color = j % 3 === 0 ? COLORS.yellow : COLORS.orange;
+            xp.size = 5 + Math.random() * 6;
+            xp.life = 350 + Math.random() * 250;
+            xp.maxLife = 600;
+            xp.type = 'explosion';
           }
-          
-          // Explosion rings
-          damageParticles.push({
-            id: generateId(),
-            position: { ...projectile.position },
-            velocity: { x: 0, y: 0 },
-            color: COLORS.orange,
-            size: explosionRadius,
-            life: 300,
-            maxLife: 300,
-            type: 'ring',
-          });
-          damageParticles.push({
-            id: generateId(),
-            position: { ...projectile.position },
-            velocity: { x: 0, y: 0 },
-            color: COLORS.yellow,
-            size: explosionRadius * 0.6,
-            life: 200,
-            maxLife: 200,
-            type: 'ring',
-          });
-          
-          // Damage all enemies in explosion radius
-          updatedEnemies.forEach((otherEnemy, idx) => {
-            if (otherEnemy.id === enemy.id) return; // Already damaged
+
+          // Fast outward sparks
+          for (let j = 0; j < 15; j++) {
+            const sparkAngle = Math.random() * Math.PI * 2;
+            const sparkSpeed = 8 + Math.random() * 10;
+            const sk = particlePool.acquire();
+            sk.id = generateId();
+            sk.position.x = projectile.position.x;
+            sk.position.y = projectile.position.y;
+            sk.velocity.x = Math.cos(sparkAngle) * sparkSpeed;
+            sk.velocity.y = Math.sin(sparkAngle) * sparkSpeed;
+            sk.color = j % 2 === 0 ? COLORS.yellow : COLORS.white;
+            sk.size = 2 + Math.random() * 2;
+            sk.life = 200 + Math.random() * 150;
+            sk.maxLife = 350;
+            sk.type = 'spark';
+          }
+
+          // Debris trails radiating outward
+          for (let j = 0; j < 8; j++) {
+            const trailAngle = (j / 8) * Math.PI * 2 + Math.random() * 0.4;
+            const trailSpeed = 6 + Math.random() * 4;
+            const tl = particlePool.acquire();
+            tl.id = generateId();
+            tl.position.x = projectile.position.x;
+            tl.position.y = projectile.position.y;
+            tl.velocity.x = Math.cos(trailAngle) * trailSpeed;
+            tl.velocity.y = Math.sin(trailAngle) * trailSpeed;
+            tl.color = COLORS.orange;
+            tl.size = 14;
+            tl.life = 250;
+            tl.maxLife = 250;
+            tl.type = 'trail';
+          }
+
+          // Explosion shockwave rings (3 layers)
+          const er1 = particlePool.acquire();
+          er1.id = generateId();
+          er1.position.x = projectile.position.x;
+          er1.position.y = projectile.position.y;
+          er1.velocity.x = 0;
+          er1.velocity.y = 0;
+          er1.color = COLORS.orange;
+          er1.size = explosionRadius;
+          er1.life = 400;
+          er1.maxLife = 400;
+          er1.type = 'ring';
+
+          const er2 = particlePool.acquire();
+          er2.id = generateId();
+          er2.position.x = projectile.position.x;
+          er2.position.y = projectile.position.y;
+          er2.velocity.x = 0;
+          er2.velocity.y = 0;
+          er2.color = COLORS.yellow;
+          er2.size = explosionRadius * 0.65;
+          er2.life = 300;
+          er2.maxLife = 300;
+          er2.type = 'ring';
+
+          const er3 = particlePool.acquire();
+          er3.id = generateId();
+          er3.position.x = projectile.position.x;
+          er3.position.y = projectile.position.y;
+          er3.velocity.x = 0;
+          er3.velocity.y = 0;
+          er3.color = COLORS.pink;
+          er3.size = explosionRadius * 1.2;
+          er3.life = 200;
+          er3.maxLife = 200;
+          er3.type = 'ring';
+
+          // Damage enemies in explosion radius via spatial grid
+          enemyGrid.queryRadius(projectile.position.x, projectile.position.y, explosionRadius, (otherIdx) => {
+            if (otherIdx >= updatedEnemies.length) return;
+            const otherEnemy = updatedEnemies[otherIdx];
+            if (!otherEnemy || otherEnemy.id === enemy.id || killedEnemyIds.has(otherEnemy.id)) return;
+
             const edx = otherEnemy.position.x - projectile.position.x;
             const edy = otherEnemy.position.y - projectile.position.y;
-            const eDist = Math.sqrt(edx * edx + edy * edy);
-            
-            if (eDist < explosionRadius) {
-              // Damage falls off with distance
+            const eDistSq = edx * edx + edy * edy;
+
+            if (eDistSq < explosionRadiusSq) {
+              const eDist = Math.sqrt(eDistSq);
               const falloff = 1 - (eDist / explosionRadius) * 0.5;
               const splashDamage = projectile.damage * falloff * 0.7;
               otherEnemy.health -= splashDamage;
-              
-              // Damage number for splash
-              damageParticles.push({
-                id: generateId(),
-                position: { ...otherEnemy.position },
-                velocity: { x: (Math.random() - 0.5) * 2, y: -3 },
-                color: COLORS.orange,
-                size: 8,
-                life: 300,
-                maxLife: 300,
-                type: 'text',
-                text: Math.floor(splashDamage).toString(),
-              });
-              
-              if (otherEnemy.health <= 0 && !killedEnemies.find(k => k.id === otherEnemy.id)) {
+
+              const sdp = particlePool.acquire();
+              sdp.id = generateId();
+              sdp.position.x = otherEnemy.position.x;
+              sdp.position.y = otherEnemy.position.y;
+              sdp.velocity.x = (Math.random() - 0.5) * 2;
+              sdp.velocity.y = -3;
+              sdp.color = COLORS.orange;
+              sdp.size = 12;
+              sdp.life = 450;
+              sdp.maxLife = 450;
+              sdp.type = 'text';
+              sdp.text = Math.floor(splashDamage).toString();
+
+              if (otherEnemy.health <= 0 && !killedEnemyIds.has(otherEnemy.id)) {
                 killedEnemies.push(otherEnemy);
+                killedEnemyIds.add(otherEnemy.id);
               }
             }
           });
-          
-          // Remove dead enemies from splash damage
-          updatedEnemies = updatedEnemies.filter(e => !killedEnemies.find(k => k.id === e.id));
         }
 
-        if (enemy.health <= 0) {
+        if (enemy.health <= 0 && !killedEnemyIds.has(enemy.id)) {
           killedEnemies.push(enemy);
-          updatedEnemies = updatedEnemies.filter(e => e.id !== enemy.id);
+          killedEnemyIds.add(enemy.id);
         }
 
         if (projectile.piercing <= 0) {
-          return false; // Remove projectile
+          shouldRemove = true;
+          return;
         }
         projectile.piercing--;
       }
-    }
-    return true;
+    });
+
+    if (shouldRemove) return false; // release projectile
+    return true; // keep
   });
 
-  return { updatedEnemies, updatedProjectiles, killedEnemies, damageParticles, damageDealt };
+  // Remove killed enemies
+  if (killedEnemyIds.size > 0) {
+    updatedEnemies = updatedEnemies.filter(e => !killedEnemyIds.has(e.id));
+  }
+
+  return { updatedEnemies, killedEnemies, damageDealt, missileShake };
 }
 
 function updateEnemy(enemy: Enemy, player: Player, deltaTime: number, currentTime: number, player2?: Player | null): Enemy {
-  // Target the closest player (if player2 exists and is alive)
   let targetPlayer = player;
   if (player2 && player2.health > 0) {
     const dist1 = Math.hypot(player.position.x - enemy.position.x, player.position.y - enemy.position.y);
     const dist2 = Math.hypot(player2.position.x - enemy.position.x, player2.position.y - enemy.position.y);
-    // If P1 is dead, always target P2. Otherwise target closest.
     if (player.health <= 0 || dist2 < dist1) {
       targetPlayer = player2;
     }
@@ -877,7 +1264,6 @@ function updateEnemy(enemy: Enemy, player: Player, deltaTime: number, currentTim
   let vy = (dy / distance) * enemy.speed;
   let updatedEnemy = { ...enemy };
 
-  // Zigzag movement
   if (enemy.type === 'zigzag') {
     const phase = (enemy.zigzagPhase || 0) + deltaTime * 0.15;
     const perpX = -dy / distance;
@@ -888,7 +1274,6 @@ function updateEnemy(enemy: Enemy, player: Player, deltaTime: number, currentTim
     updatedEnemy.zigzagPhase = phase;
   }
 
-  // Ghost fades in and out, phases through when faded
   if (enemy.type === 'ghost') {
     const fadeSpeed = 0.002;
     const timeSinceSpawn = currentTime - enemy.spawnTime;
@@ -896,8 +1281,6 @@ function updateEnemy(enemy: Enemy, player: Player, deltaTime: number, currentTim
     updatedEnemy.ghostAlpha = Math.max(0.1, Math.min(1, alpha));
   }
 
-  // Magnet pulls XP orbs away from player (handled elsewhere)
-  // Just moves slower but steadily
   if (enemy.type === 'magnet') {
     vx *= 0.8;
     vy *= 0.8;
@@ -921,9 +1304,10 @@ function checkEnemyPlayerCollision(
   for (const enemy of enemies) {
     const dx = player.position.x - enemy.position.x;
     const dy = player.position.y - enemy.position.y;
-    const distance = Math.sqrt(dx * dx + dy * dy);
+    const distSq = dx * dx + dy * dy;
+    const radiiSum = player.radius + enemy.radius;
 
-    if (distance < player.radius + enemy.radius) {
+    if (distSq < radiiSum * radiiSum) {
       return { hit: true, damage: enemy.damage };
     }
   }
@@ -931,11 +1315,9 @@ function checkEnemyPlayerCollision(
 }
 
 function spawnEnemy(wave: number, width: number, height: number, playerPos: Vector2, isSplit = false): Enemy {
-  // Determine enemy type based on wave
   let type: EnemyType = 'chaser';
   const roll = Math.random();
-  
-  // More variety as waves progress
+
   if (wave >= 2 && roll < 0.25) type = 'swarm';
   if (wave >= 2 && roll >= 0.25 && roll < 0.35) type = 'zigzag';
   if (wave >= 3 && roll >= 0.35 && roll < 0.45) type = 'shooter';
@@ -948,16 +1330,15 @@ function spawnEnemy(wave: number, width: number, height: number, playerPos: Vect
   const config = ENEMY_CONFIGS[type];
   const waveMultiplier = 1 + wave * 0.1;
 
-  // Spawn at edge of screen, away from player
   let x: number, y: number;
   const side = Math.floor(Math.random() * 4);
-  const margin = 50;
+  const marginDist = 50;
 
   switch (side) {
-    case 0: x = -margin; y = Math.random() * height; break;
-    case 1: x = width + margin; y = Math.random() * height; break;
-    case 2: x = Math.random() * width; y = -margin; break;
-    default: x = Math.random() * width; y = height + margin; break;
+    case 0: x = -marginDist; y = Math.random() * height; break;
+    case 1: x = width + marginDist; y = Math.random() * height; break;
+    case 2: x = Math.random() * width; y = -marginDist; break;
+    default: x = Math.random() * width; y = height + marginDist; break;
   }
 
   return {
@@ -981,7 +1362,7 @@ function spawnEnemy(wave: number, width: number, height: number, playerPos: Vect
 
 function spawnBoss(width: number, height: number, playerPos: Vector2): Enemy {
   const config = ENEMY_CONFIGS.boss;
-  
+
   return {
     id: generateId(),
     position: { x: width / 2, y: -100 },
@@ -1000,33 +1381,50 @@ function spawnBoss(width: number, height: number, playerPos: Vector2): Enemy {
 
 function collectExperienceOrbs(
   player: Player,
-  orbs: ExperienceOrb[],
   config: GameConfig
-): { collectedXP: number; remainingOrbs: ExperienceOrb[] } {
+): number {
   let collectedXP = 0;
   const magnetRange = config.magnetRange * (player.magnetMultiplier || 1);
-  
-  const remainingOrbs = orbs.filter(orb => {
+
+  xpOrbPool.forEach(orb => {
     const dx = player.position.x - orb.position.x;
     const dy = player.position.y - orb.position.y;
-    const distance = Math.sqrt(dx * dx + dy * dy);
+    const distSq = dx * dx + dy * dy;
 
-    if (distance < player.radius + 10) {
+    if (distSq < (player.radius + 10) * (player.radius + 10)) {
       collectedXP += orb.value;
-      return false;
+
+      // XP collection sparkle
+      for (let si = 0; si < 3; si++) {
+        const sparkAngle = Math.random() * Math.PI * 2;
+        const sp = particlePool.acquire();
+        sp.id = generateId();
+        sp.position.x = orb.position.x;
+        sp.position.y = orb.position.y;
+        sp.velocity.x = Math.cos(sparkAngle) * (1 + Math.random() * 2);
+        sp.velocity.y = Math.sin(sparkAngle) * (1 + Math.random() * 2) - 1;
+        sp.color = COLORS.green;
+        sp.size = 2 + Math.random() * 2;
+        sp.life = 150 + Math.random() * 100;
+        sp.maxLife = 250;
+        sp.type = 'spark';
+      }
+
+      return false; // release
     }
 
     // Move orbs towards player if within magnet range
-    if (distance < magnetRange) {
+    if (distSq < magnetRange * magnetRange) {
+      const distance = Math.sqrt(distSq);
       const speed = 5 * (1 - distance / magnetRange);
       orb.position.x += (dx / distance) * speed;
       orb.position.y += (dy / distance) * speed;
     }
 
-    return true;
+    return true; // keep
   });
 
-  return { collectedXP, remainingOrbs };
+  return collectedXP;
 }
 
 function addExperience(player: Player, xp: number, config: GameConfig): { player: Player; leveledUp: boolean } {
@@ -1048,8 +1446,7 @@ function addExperience(player: Player, xp: number, config: GameConfig): { player
 export function generateUpgrades(player: Player): Upgrade[] {
   const upgrades: Upgrade[] = [];
   const ownedWeaponTypes = new Set(player.weapons.map(w => w.type));
-  
-  // Weapon upgrades for owned weapons
+
   player.weapons.forEach(weapon => {
     if (weapon.level < 5) {
       const config = WEAPON_CONFIGS[weapon.type];
@@ -1058,14 +1455,13 @@ export function generateUpgrades(player: Player): Upgrade[] {
         type: 'weapon_upgrade',
         weaponType: weapon.type,
         name: `${weapon.type.charAt(0).toUpperCase() + weapon.type.slice(1)} +`,
-        description: `Level ${weapon.level} → ${weapon.level + 1}: +20% damage, faster fire`,
+        description: `Level ${weapon.level} \u2192 ${weapon.level + 1}: +20% damage, faster fire`,
         icon: getWeaponIcon(weapon.type),
         color: config.color,
       });
     }
   });
 
-  // New weapons not yet owned
   const allWeapons: WeaponType[] = ['blaster', 'spread', 'laser', 'orbit', 'missile'];
   allWeapons.forEach(weaponType => {
     if (!ownedWeaponTypes.has(weaponType)) {
@@ -1082,14 +1478,13 @@ export function generateUpgrades(player: Player): Upgrade[] {
     }
   });
 
-  // Stat upgrades
   upgrades.push({
     id: 'stat_health',
     type: 'stat',
     stat: 'health',
     name: 'Vitality',
     description: '+25 Max HP, heal 25 HP',
-    icon: '❤️',
+    icon: '\u2764\ufe0f',
     color: '#39ff14',
   });
 
@@ -1099,7 +1494,7 @@ export function generateUpgrades(player: Player): Upgrade[] {
     stat: 'speed',
     name: 'Swift',
     description: '+15% movement speed',
-    icon: '⚡',
+    icon: '\u26a1',
     color: '#e4ff1a',
   });
 
@@ -1109,23 +1504,22 @@ export function generateUpgrades(player: Player): Upgrade[] {
     stat: 'magnet',
     name: 'Magnet',
     description: '+30% pickup range',
-    icon: '🧲',
+    icon: '\ud83e\uddf2',
     color: '#bf5fff',
   });
 
-  // Shuffle and return 3 random upgrades
   const shuffled = upgrades.sort(() => Math.random() - 0.5);
   return shuffled.slice(0, 3);
 }
 
 function getWeaponIcon(type: WeaponType): string {
   switch (type) {
-    case 'blaster': return '🔫';
-    case 'spread': return '💨';
-    case 'laser': return '⚡';
-    case 'orbit': return '🔮';
-    case 'missile': return '🚀';
-    default: return '🔫';
+    case 'blaster': return '\ud83d\udd2b';
+    case 'spread': return '\ud83d\udca8';
+    case 'laser': return '\u26a1';
+    case 'orbit': return '\ud83d\udd2e';
+    case 'missile': return '\ud83d\ude80';
+    default: return '\ud83d\udd2b';
   }
 }
 
@@ -1184,11 +1578,9 @@ export function applyUpgrade(state: GameState, upgrade: Upgrade): GameState {
         };
         break;
       case 'speed':
-        // Permanent speed bonus from level-up (capped via updatePlayerBuffs)
         player = { ...player, speedBonus: player.speedBonus + 0.5 };
         break;
       case 'magnet':
-        // Permanent magnet range bonus from level-up
         player = { ...player, magnetBonus: player.magnetBonus + 0.3 };
         break;
     }
@@ -1203,7 +1595,7 @@ export function applyUpgrade(state: GameState, upgrade: Upgrade): GameState {
 }
 
 function createPowerup(position: Vector2): PowerUp {
-  const types: PowerUpType[] = ['health', 'speed', 'damage', 'magnet', 'xp'];
+  const types: PowerUpType[] = ['health', 'speed', 'damage', 'magnet', 'xp', 'bomb'];
   const type = types[Math.floor(Math.random() * types.length)];
 
   return {
@@ -1219,33 +1611,31 @@ function collectPowerups(
   player: Player,
   powerups: PowerUp[],
   currentTime: number
-): { collectedPowerups: PowerUp[]; remainingPowerups: PowerUp[]; powerupParticles: Particle[] } {
+): { collectedPowerups: PowerUp[]; remainingPowerups: PowerUp[] } {
   const collectedPowerups: PowerUp[] = [];
-  const powerupParticles: Particle[] = [];
 
   const remainingPowerups = powerups.filter(powerup => {
-    // Remove old powerups
     if (currentTime - powerup.createdAt > 15000) return false;
 
     const dx = player.position.x - powerup.position.x;
     const dy = player.position.y - powerup.position.y;
-    const distance = Math.sqrt(dx * dx + dy * dy);
+    const distSq = dx * dx + dy * dy;
 
-    if (distance < player.radius + 15) {
+    if (distSq < (player.radius + 15) * (player.radius + 15)) {
       collectedPowerups.push(powerup);
-      powerupParticles.push(...createExplosion(powerup.position, POWERUP_CONFIGS[powerup.type].color, 10));
+      createExplosion(powerup.position, POWERUP_CONFIGS[powerup.type].color, 18);
       return false;
     }
 
     return true;
   });
 
-  return { collectedPowerups, remainingPowerups, powerupParticles };
+  return { collectedPowerups, remainingPowerups };
 }
 
 function applyPowerup(player: Player, powerup: PowerUp, currentTime: number): Player {
   const duration = POWERUP_CONFIGS[powerup.type].duration;
-  
+
   switch (powerup.type) {
     case 'health':
       return { ...player, health: Math.min(player.maxHealth, player.health + 25) };
@@ -1275,22 +1665,22 @@ function applyPowerup(player: Player, powerup: PowerUp, currentTime: number): Pl
       };
     case 'xp':
       return addExperience(player, 50, DEFAULT_CONFIG).player;
+    case 'bomb':
+      return player; // bomb effect handled in collection loop
     default:
       return player;
   }
 }
 
 function updatePlayerBuffs(player: Player, currentTime: number): Player {
-  // Remove expired buffs
   const activeBuffs = player.activeBuffs.filter(b => b.expiresAt > currentTime);
-  
-  // Calculate effective stats
+
   const speedBuff = activeBuffs.find(b => b.type === 'speed');
   const magnetBuff = activeBuffs.find(b => b.type === 'magnet');
-  
+
   const effectiveSpeed = Math.min(8, (player.baseSpeed + player.speedBonus) * (speedBuff?.multiplier || 1));
   const effectiveMagnet = (1 + player.magnetBonus) * (magnetBuff?.multiplier || 1);
-  
+
   return {
     ...player,
     activeBuffs,
@@ -1299,641 +1689,212 @@ function updatePlayerBuffs(player: Player, currentTime: number): Player {
   };
 }
 
-function createExplosion(position: Vector2, color: string, count: number): Particle[] {
-  const particles: Particle[] = [];
-  
-  // Inner burst - fast small particles
+function createExplosion(position: Vector2, color: string, count: number): void {
+  // Inner burst
   for (let i = 0; i < count; i++) {
     const angle = (Math.PI * 2 * i) / count + Math.random() * 0.5;
     const speed = 4 + Math.random() * 6;
-    
-    particles.push({
-      id: generateId(),
-      position: { x: position.x + (Math.random() - 0.5) * 10, y: position.y + (Math.random() - 0.5) * 10 },
-      velocity: {
-        x: Math.cos(angle) * speed,
-        y: Math.sin(angle) * speed,
-      },
-      color,
-      size: 3 + Math.random() * 3,
-      life: 400 + Math.random() * 200,
-      maxLife: 600,
-      type: 'explosion',
-    });
+
+    const p = particlePool.acquire();
+    p.id = generateId();
+    p.position.x = position.x + (Math.random() - 0.5) * 10;
+    p.position.y = position.y + (Math.random() - 0.5) * 10;
+    p.velocity.x = Math.cos(angle) * speed;
+    p.velocity.y = Math.sin(angle) * speed;
+    p.color = color;
+    p.size = 3 + Math.random() * 3;
+    p.life = 400 + Math.random() * 200;
+    p.maxLife = 600;
+    p.type = 'explosion';
   }
 
-  // Outer ring - slower larger particles
-  for (let i = 0; i < Math.floor(count / 2); i++) {
-    const angle = (Math.PI * 2 * i) / (count / 2) + Math.random() * 0.3;
+  // Outer ring
+  const outerCount = Math.floor(count / 2);
+  for (let i = 0; i < outerCount; i++) {
+    const angle = (Math.PI * 2 * i) / outerCount + Math.random() * 0.3;
     const speed = 1 + Math.random() * 2;
-    
-    particles.push({
-      id: generateId(),
-      position: { ...position },
-      velocity: {
-        x: Math.cos(angle) * speed,
-        y: Math.sin(angle) * speed,
-      },
-      color: COLORS.white,
-      size: 2 + Math.random() * 2,
-      life: 300 + Math.random() * 200,
-      maxLife: 500,
-      type: 'spark',
-    });
+
+    const p = particlePool.acquire();
+    p.id = generateId();
+    p.position.x = position.x;
+    p.position.y = position.y;
+    p.velocity.x = Math.cos(angle) * speed;
+    p.velocity.y = Math.sin(angle) * speed;
+    p.color = COLORS.white;
+    p.size = 2 + Math.random() * 2;
+    p.life = 300 + Math.random() * 200;
+    p.maxLife = 500;
+    p.type = 'spark';
   }
 
-  // Geometry Wars style line trails
+  // Line trails
   for (let i = 0; i < 6; i++) {
     const angle = (Math.PI * 2 * i) / 6;
-    particles.push({
-      id: generateId(),
-      position: { ...position },
-      velocity: {
-        x: Math.cos(angle) * 8,
-        y: Math.sin(angle) * 8,
-      },
-      color,
-      size: 12,
-      life: 200,
-      maxLife: 200,
-      type: 'trail',
+    const p = particlePool.acquire();
+    p.id = generateId();
+    p.position.x = position.x;
+    p.position.y = position.y;
+    p.velocity.x = Math.cos(angle) * 8;
+    p.velocity.y = Math.sin(angle) * 8;
+    p.color = color;
+    p.size = 12;
+    p.life = 200;
+    p.maxLife = 200;
+    p.type = 'trail';
+  }
+}
+
+// Phase 3: Serialize game state for render worker (lean visual-only data)
+export interface RenderState {
+  player: {
+    position: Vector2;
+    radius: number;
+    color: string;
+    health: number;
+    maxHealth: number;
+    invulnerableUntil: number;
+    level: number;
+    experience: number;
+    weapons: Array<{ type: WeaponType; level: number }>;
+    activeBuffs: Array<{ type: string; expiresAt: number; multiplier: number }>;
+  };
+  enemies: Array<{
+    position: Vector2;
+    radius: number;
+    color: string;
+    health: number;
+    maxHealth: number;
+    type: EnemyType;
+    ghostAlpha?: number;
+    spawnTime: number;
+  }>;
+  projectiles: Array<{
+    position: Vector2;
+    velocity: Vector2;
+    radius: number;
+    color: string;
+    orbit?: { angle: number; radius: number; speed: number; owner: Vector2 };
+    weaponType?: WeaponType;
+  }>;
+  projectileCount: number;
+  particles: Array<{
+    position: Vector2;
+    velocity: Vector2;
+    color: string;
+    size: number;
+    life: number;
+    maxLife: number;
+    type: 'explosion' | 'trail' | 'spark' | 'text' | 'ring';
+    text?: string;
+  }>;
+  particleCount: number;
+  experienceOrbs: Array<{
+    position: Vector2;
+  }>;
+  experienceOrbCount: number;
+  powerups: Array<{
+    position: Vector2;
+    type: PowerUpType;
+  }>;
+  score: number;
+  wave: number;
+  multiplier: number;
+  screenShake: number;
+  arena: ArenaType;
+  waveAnnounceTime?: number;
+  screenFlash?: number;
+  screenFlashColor?: string;
+}
+
+export function serializeForRender(state: GameState): RenderState {
+  const enemies: RenderState['enemies'] = [];
+  for (let i = 0; i < state.enemies.length; i++) {
+    const e = state.enemies[i];
+    enemies.push({
+      position: { x: e.position.x, y: e.position.y },
+      radius: e.radius,
+      color: e.color,
+      health: e.health,
+      maxHealth: e.maxHealth,
+      type: e.type,
+      ghostAlpha: e.ghostAlpha,
+      spawnTime: e.spawnTime,
     });
   }
 
-  return particles;
-}
+  const projectiles: RenderState['projectiles'] = [];
+  for (let i = 0; i < state.projectileCount; i++) {
+    const p = state.projectiles[i];
+    projectiles.push({
+      position: { x: p.position.x, y: p.position.y },
+      velocity: { x: p.velocity.x, y: p.velocity.y },
+      radius: p.radius,
+      color: p.color,
+      orbit: p.orbit ? { angle: p.orbit.angle, radius: p.orbit.radius, speed: p.orbit.speed, owner: { x: p.orbit.owner.x, y: p.orbit.owner.y } } : undefined,
+      weaponType: p.weaponType,
+    });
+  }
 
-function updateParticle(particle: Particle, deltaTime: number): Particle {
-  const newLife = particle.life - deltaTime * 16;
-  const lifeRatio = Math.max(0, newLife / particle.maxLife);
+  const particles: RenderState['particles'] = [];
+  for (let i = 0; i < state.particleCount; i++) {
+    const pt = state.particles[i];
+    particles.push({
+      position: { x: pt.position.x, y: pt.position.y },
+      velocity: { x: pt.velocity.x, y: pt.velocity.y },
+      color: pt.color,
+      size: pt.size,
+      life: pt.life,
+      maxLife: pt.maxLife,
+      type: pt.type,
+      text: pt.text,
+    });
+  }
+
+  const experienceOrbs: RenderState['experienceOrbs'] = [];
+  for (let i = 0; i < state.experienceOrbCount; i++) {
+    const o = state.experienceOrbs[i];
+    experienceOrbs.push({
+      position: { x: o.position.x, y: o.position.y },
+    });
+  }
+
+  const powerups: RenderState['powerups'] = [];
+  for (let i = 0; i < state.powerups.length; i++) {
+    const pw = state.powerups[i];
+    powerups.push({
+      position: { x: pw.position.x, y: pw.position.y },
+      type: pw.type,
+    });
+  }
+
   return {
-    ...particle,
-    position: {
-      x: particle.position.x + particle.velocity.x * deltaTime * 0.1,
-      y: particle.position.y + particle.velocity.y * deltaTime * 0.1,
+    player: {
+      position: { x: state.player.position.x, y: state.player.position.y },
+      radius: state.player.radius,
+      color: state.player.color,
+      health: state.player.health,
+      maxHealth: state.player.maxHealth,
+      invulnerableUntil: state.player.invulnerableUntil,
+      level: state.player.level,
+      experience: state.player.experience,
+      weapons: state.player.weapons.map(w => ({ type: w.type, level: w.level })),
+      activeBuffs: state.player.activeBuffs.map(b => ({ type: b.type, expiresAt: b.expiresAt, multiplier: b.multiplier })),
     },
-    velocity: {
-      x: particle.velocity.x * 0.98,
-      y: particle.velocity.y * 0.98,
-    },
-    life: newLife,
-    size: Math.max(0.1, particle.size * lifeRatio),
+    enemies,
+    projectiles,
+    projectileCount: projectiles.length,
+    particles,
+    particleCount: particles.length,
+    experienceOrbs,
+    experienceOrbCount: experienceOrbs.length,
+    powerups,
+    score: state.score,
+    wave: state.wave,
+    multiplier: state.multiplier,
+    screenShake: state.screenShake,
+    arena: state.arena,
+    waveAnnounceTime: state.waveAnnounceTime,
+    screenFlash: state.screenFlash,
+    screenFlashColor: state.screenFlashColor,
   };
-}
-
-function drawArenaBackground(ctx: CanvasRenderingContext2D, arena: ArenaType, width: number, height: number, time: number) {
-  const gridSize = 50;
-  
-  switch (arena) {
-    case 'void':
-      // Pure black with subtle moving stars
-      for (let i = 0; i < 50; i++) {
-        const x = (i * 73 + time * 0.01) % width;
-        const y = (i * 97) % height;
-        const alpha = 0.2 + Math.sin(time * 0.002 + i) * 0.15;
-        ctx.fillStyle = `rgba(255, 255, 255, ${alpha})`;
-        ctx.fillRect(x, y, 2, 2);
-      }
-      break;
-      
-    case 'grid':
-      // Classic neon grid
-      ctx.strokeStyle = 'rgba(228, 255, 26, 0.03)';
-      ctx.lineWidth = 1;
-      for (let x = 0; x < width; x += gridSize) {
-        ctx.beginPath();
-        ctx.moveTo(x, 0);
-        ctx.lineTo(x, height);
-        ctx.stroke();
-      }
-      for (let y = 0; y < height; y += gridSize) {
-        ctx.beginPath();
-        ctx.moveTo(0, y);
-        ctx.lineTo(width, y);
-        ctx.stroke();
-      }
-      break;
-      
-    case 'cyber':
-      // Hexagonal pattern
-      ctx.strokeStyle = 'rgba(0, 240, 255, 0.04)';
-      ctx.lineWidth = 1;
-      const hexSize = 40;
-      const hexHeight = hexSize * Math.sqrt(3);
-      for (let row = -1; row < height / hexHeight + 1; row++) {
-        for (let col = -1; col < width / (hexSize * 1.5) + 1; col++) {
-          const x = col * hexSize * 1.5;
-          const y = row * hexHeight + (col % 2) * hexHeight / 2;
-          ctx.beginPath();
-          for (let i = 0; i < 6; i++) {
-            const angle = (i / 6) * Math.PI * 2;
-            const hx = x + Math.cos(angle) * hexSize;
-            const hy = y + Math.sin(angle) * hexSize;
-            if (i === 0) ctx.moveTo(hx, hy);
-            else ctx.lineTo(hx, hy);
-          }
-          ctx.closePath();
-          ctx.stroke();
-        }
-      }
-      break;
-      
-    case 'neon':
-      // Animated concentric circles
-      ctx.strokeStyle = 'rgba(255, 45, 106, 0.03)';
-      ctx.lineWidth = 2;
-      const centerX = width / 2;
-      const centerY = height / 2;
-      const maxRadius = Math.sqrt(centerX * centerX + centerY * centerY);
-      for (let r = (time * 0.02) % 100; r < maxRadius; r += 100) {
-        ctx.beginPath();
-        ctx.arc(centerX, centerY, r, 0, Math.PI * 2);
-        ctx.stroke();
-      }
-      // Add radial lines
-      ctx.strokeStyle = 'rgba(191, 95, 255, 0.02)';
-      for (let i = 0; i < 12; i++) {
-        const angle = (i / 12) * Math.PI * 2 + time * 0.0005;
-        ctx.beginPath();
-        ctx.moveTo(centerX, centerY);
-        ctx.lineTo(centerX + Math.cos(angle) * maxRadius, centerY + Math.sin(angle) * maxRadius);
-        ctx.stroke();
-      }
-      break;
-  }
-}
-
-// Render functions
-export function renderGame(
-  ctx: CanvasRenderingContext2D,
-  state: GameState,
-  width: number,
-  height: number,
-  time: number
-) {
-  const { player, enemies, projectiles, powerups, experienceOrbs, particles, screenShake } = state;
-
-  // Apply screen shake
-  ctx.save();
-  if (screenShake > 0) {
-    ctx.translate(
-      (Math.random() - 0.5) * screenShake,
-      (Math.random() - 0.5) * screenShake
-    );
-  }
-
-  // Clear and draw background based on arena type
-  ctx.fillStyle = COLORS.black;
-  ctx.fillRect(0, 0, width, height);
-
-  drawArenaBackground(ctx, state.arena, width, height, time);
-
-  // Draw experience orbs - diamond shape with glow to distinguish from projectiles
-  experienceOrbs.forEach(orb => {
-    const pulse = 1 + Math.sin(time * 0.008 + orb.position.x * 0.1) * 0.3;
-    const size = 6 * pulse;
-    
-    // Outer glow
-    ctx.shadowColor = COLORS.green;
-    ctx.shadowBlur = 12;
-    
-    // Diamond shape
-    ctx.fillStyle = COLORS.green;
-    ctx.globalAlpha = 0.9;
-    ctx.beginPath();
-    ctx.moveTo(orb.position.x, orb.position.y - size);
-    ctx.lineTo(orb.position.x + size * 0.7, orb.position.y);
-    ctx.lineTo(orb.position.x, orb.position.y + size);
-    ctx.lineTo(orb.position.x - size * 0.7, orb.position.y);
-    ctx.closePath();
-    ctx.fill();
-    
-    // Inner bright core
-    ctx.fillStyle = COLORS.white;
-    ctx.globalAlpha = 0.7;
-    ctx.beginPath();
-    ctx.arc(orb.position.x, orb.position.y, 2, 0, Math.PI * 2);
-    ctx.fill();
-    
-    ctx.shadowBlur = 0;
-    ctx.globalAlpha = 1;
-  });
-
-  // Draw powerups
-  powerups.forEach(powerup => {
-    const config = POWERUP_CONFIGS[powerup.type];
-    const pulse = 1 + Math.sin(time * 0.01) * 0.2;
-    
-    ctx.fillStyle = config.color;
-    ctx.font = `${20 * pulse}px sans-serif`;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(config.icon, powerup.position.x, powerup.position.y);
-  });
-
-  // Draw particles with Geometry Wars style effects
-  particles.forEach(particle => {
-    const alpha = particle.life / particle.maxLife;
-    ctx.globalAlpha = alpha;
-    
-    if (particle.type === 'text') {
-      ctx.fillStyle = particle.color;
-      ctx.font = `bold ${particle.size}px "JetBrains Mono", monospace`;
-      ctx.textAlign = 'center';
-      ctx.fillText(particle.text || '', particle.position.x, particle.position.y);
-    } else if (particle.type === 'trail') {
-      // Line trail effect
-      ctx.strokeStyle = particle.color;
-      ctx.lineWidth = particle.size * alpha * 0.5;
-      ctx.lineCap = 'round';
-      ctx.shadowColor = particle.color;
-      ctx.shadowBlur = 8;
-      ctx.beginPath();
-      ctx.moveTo(
-        particle.position.x - particle.velocity.x * 2,
-        particle.position.y - particle.velocity.y * 2
-      );
-      ctx.lineTo(particle.position.x, particle.position.y);
-      ctx.stroke();
-      ctx.shadowBlur = 0;
-    } else if (particle.type === 'spark') {
-      // Small bright spark
-      ctx.fillStyle = particle.color;
-      ctx.shadowColor = particle.color;
-      ctx.shadowBlur = 6;
-      ctx.beginPath();
-      const sparkRadius = Math.max(0.1, particle.size * 0.5);
-      ctx.arc(particle.position.x, particle.position.y, sparkRadius, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.shadowBlur = 0;
-    } else if (particle.type === 'ring') {
-      // Expanding ring
-      ctx.strokeStyle = particle.color;
-      ctx.lineWidth = Math.max(0.1, 2 * alpha);
-      ctx.beginPath();
-      const ringRadius = Math.max(0.1, particle.size * (1 - alpha) * 3);
-      ctx.arc(particle.position.x, particle.position.y, ringRadius, 0, Math.PI * 2);
-      ctx.stroke();
-    } else {
-      // Default explosion particle - square with glow
-      ctx.fillStyle = particle.color;
-      ctx.shadowColor = particle.color;
-      ctx.shadowBlur = 4;
-      ctx.save();
-      ctx.translate(particle.position.x, particle.position.y);
-      ctx.rotate(Math.atan2(particle.velocity.y, particle.velocity.x));
-      ctx.fillRect(-particle.size / 2, -particle.size / 4, particle.size, particle.size / 2);
-      ctx.restore();
-      ctx.shadowBlur = 0;
-    }
-    ctx.globalAlpha = 1;
-  });
-
-  // Draw projectiles - small sprinkle shapes
-  projectiles.forEach(projectile => {
-    ctx.fillStyle = projectile.color;
-    ctx.shadowColor = projectile.color;
-    ctx.shadowBlur = 6;
-    
-    ctx.save();
-    ctx.translate(projectile.position.x, projectile.position.y);
-    
-    // Rotate in direction of travel
-    const angle = Math.atan2(projectile.velocity.y, projectile.velocity.x);
-    ctx.rotate(angle);
-    
-    if (projectile.orbit) {
-      // Orbit projectiles are small glowing orbs
-      ctx.beginPath();
-      ctx.arc(0, 0, 6, 0, Math.PI * 2);
-      ctx.fill();
-    } else {
-      // Regular projectiles are small elongated sprinkles
-      const length = 8;
-      const width = 2;
-      ctx.beginPath();
-      ctx.ellipse(0, 0, length, width, 0, 0, Math.PI * 2);
-      ctx.fill();
-      
-      // Bright core
-      ctx.fillStyle = '#ffffff';
-      ctx.globalAlpha = 0.8;
-      ctx.beginPath();
-      ctx.ellipse(0, 0, length * 0.5, width * 0.5, 0, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.globalAlpha = 1;
-    }
-    
-    ctx.restore();
-    ctx.shadowBlur = 0;
-  });
-
-  // Draw enemies
-  enemies.forEach(enemy => {
-    renderEnemy(ctx, enemy, time);
-  });
-
-  // Draw player
-  renderPlayer(ctx, player, time);
-
-  ctx.restore();
-
-  // Screen flash effect on damage
-  if (state.screenFlash && Date.now() - state.screenFlash < 150) {
-    const flashAlpha = 1 - (Date.now() - state.screenFlash) / 150;
-    ctx.fillStyle = `rgba(255, 45, 106, ${flashAlpha * 0.3})`;
-    ctx.fillRect(0, 0, width, height);
-  }
-
-  // Draw UI (not affected by screen shake)
-  renderUI(ctx, state, width, height, time);
-}
-
-function renderPlayer(ctx: CanvasRenderingContext2D, player: Player, time: number) {
-  const { position, radius, image, color, invulnerableUntil } = player;
-  const isInvulnerable = Date.now() < invulnerableUntil;
-  const flash = isInvulnerable && Math.floor(time / 100) % 2 === 0;
-
-  ctx.save();
-  ctx.translate(position.x, position.y);
-  ctx.globalAlpha = flash ? 0.5 : 1;
-
-  // Octagonal border
-  ctx.strokeStyle = color;
-  ctx.lineWidth = 3;
-  const sides = 8;
-  ctx.beginPath();
-  for (let i = 0; i < sides; i++) {
-    const angle = (i / sides) * Math.PI * 2 - Math.PI / 2;
-    const x = Math.cos(angle) * radius;
-    const y = Math.sin(angle) * radius;
-    if (i === 0) ctx.moveTo(x, y);
-    else ctx.lineTo(x, y);
-  }
-  ctx.closePath();
-  ctx.stroke();
-
-  // Draw image or fill
-  ctx.save();
-  ctx.beginPath();
-  for (let i = 0; i < sides; i++) {
-    const angle = (i / sides) * Math.PI * 2 - Math.PI / 2;
-    const x = Math.cos(angle) * (radius - 3);
-    const y = Math.sin(angle) * (radius - 3);
-    if (i === 0) ctx.moveTo(x, y);
-    else ctx.lineTo(x, y);
-  }
-  ctx.closePath();
-  ctx.clip();
-
-  if (image) {
-    const size = (radius - 3) * 2;
-    ctx.drawImage(image, -radius + 3, -radius + 3, size, size);
-  } else {
-    ctx.fillStyle = `${color}44`;
-    ctx.fill();
-  }
-  ctx.restore();
-
-  ctx.restore();
-}
-
-function renderEnemy(ctx: CanvasRenderingContext2D, enemy: Enemy, time: number) {
-  const { position, radius, color, health, maxHealth, type } = enemy;
-
-  ctx.save();
-  ctx.translate(position.x, position.y);
-
-  // Ghost enemies fade in and out
-  if (type === 'ghost') {
-    ctx.globalAlpha = enemy.ghostAlpha || 0.5;
-  }
-
-  // Add glow effect
-  ctx.shadowColor = color;
-  ctx.shadowBlur = 8;
-
-  // Draw enemy shape based on type
-  ctx.fillStyle = color;
-  ctx.strokeStyle = color;
-  ctx.lineWidth = 2;
-
-  if (type === 'boss') {
-    // Boss is larger octagon with rotation
-    const sides = 8;
-    ctx.beginPath();
-    for (let i = 0; i < sides; i++) {
-      const angle = (i / sides) * Math.PI * 2 + time * 0.002;
-      const x = Math.cos(angle) * radius;
-      const y = Math.sin(angle) * radius;
-      if (i === 0) ctx.moveTo(x, y);
-      else ctx.lineTo(x, y);
-    }
-    ctx.closePath();
-    ctx.stroke();
-    ctx.fillStyle = `${color}44`;
-    ctx.fill();
-  } else if (type === 'tank') {
-    // Tank is square
-    ctx.strokeRect(-radius, -radius, radius * 2, radius * 2);
-    ctx.fillStyle = `${color}44`;
-    ctx.fillRect(-radius, -radius, radius * 2, radius * 2);
-  } else if (type === 'swarm') {
-    // Swarm is diamond
-    ctx.beginPath();
-    ctx.moveTo(0, -radius);
-    ctx.lineTo(radius, 0);
-    ctx.lineTo(0, radius);
-    ctx.lineTo(-radius, 0);
-    ctx.closePath();
-    ctx.stroke();
-    ctx.fillStyle = `${color}44`;
-    ctx.fill();
-  } else if (type === 'zigzag') {
-    // Zigzag is triangle
-    ctx.beginPath();
-    ctx.moveTo(0, -radius);
-    ctx.lineTo(radius, radius);
-    ctx.lineTo(-radius, radius);
-    ctx.closePath();
-    ctx.stroke();
-    ctx.fillStyle = `${color}44`;
-    ctx.fill();
-  } else if (type === 'splitter') {
-    // Splitter is hexagon
-    const sides = 6;
-    ctx.beginPath();
-    for (let i = 0; i < sides; i++) {
-      const angle = (i / sides) * Math.PI * 2;
-      const x = Math.cos(angle) * radius;
-      const y = Math.sin(angle) * radius;
-      if (i === 0) ctx.moveTo(x, y);
-      else ctx.lineTo(x, y);
-    }
-    ctx.closePath();
-    ctx.stroke();
-    ctx.fillStyle = `${color}44`;
-    ctx.fill();
-  } else if (type === 'ghost') {
-    // Ghost is wavy circle
-    ctx.beginPath();
-    for (let i = 0; i <= 32; i++) {
-      const angle = (i / 32) * Math.PI * 2;
-      const wobble = Math.sin(angle * 4 + time * 0.01) * 3;
-      const x = Math.cos(angle) * (radius + wobble);
-      const y = Math.sin(angle) * (radius + wobble);
-      if (i === 0) ctx.moveTo(x, y);
-      else ctx.lineTo(x, y);
-    }
-    ctx.closePath();
-    ctx.stroke();
-    ctx.fillStyle = `${color}22`;
-    ctx.fill();
-  } else if (type === 'magnet') {
-    // Magnet is horseshoe shape (simplified as arc)
-    ctx.lineWidth = 4;
-    ctx.beginPath();
-    ctx.arc(0, 0, radius, Math.PI * 0.2, Math.PI * 1.8);
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.arc(0, 0, radius * 0.6, 0, Math.PI * 2);
-    ctx.fillStyle = `${color}44`;
-    ctx.fill();
-  } else if (type === 'bomber') {
-    // Bomber is star shape
-    ctx.beginPath();
-    for (let i = 0; i < 10; i++) {
-      const angle = (i / 10) * Math.PI * 2 - Math.PI / 2;
-      const r = i % 2 === 0 ? radius : radius * 0.5;
-      const x = Math.cos(angle) * r;
-      const y = Math.sin(angle) * r;
-      if (i === 0) ctx.moveTo(x, y);
-      else ctx.lineTo(x, y);
-    }
-    ctx.closePath();
-    ctx.stroke();
-    ctx.fillStyle = `${color}44`;
-    ctx.fill();
-  } else {
-    // Default circle (chaser, shooter)
-    ctx.beginPath();
-    ctx.arc(0, 0, radius, 0, Math.PI * 2);
-    ctx.stroke();
-    ctx.fillStyle = `${color}44`;
-    ctx.fill();
-  }
-
-  ctx.shadowBlur = 0;
-
-  // Health bar (skip for ghosts when faded)
-  if (type !== 'ghost' || (enemy.ghostAlpha || 1) > 0.3) {
-    const healthPercent = health / maxHealth;
-    const barWidth = radius * 2;
-    const barHeight = 4;
-    ctx.globalAlpha = type === 'ghost' ? (enemy.ghostAlpha || 1) : 1;
-    ctx.fillStyle = COLORS.dark;
-    ctx.fillRect(-barWidth / 2, radius + 5, barWidth, barHeight);
-    ctx.fillStyle = healthPercent > 0.5 ? COLORS.green : healthPercent > 0.25 ? COLORS.yellow : COLORS.pink;
-    ctx.fillRect(-barWidth / 2, radius + 5, barWidth * healthPercent, barHeight);
-  }
-
-  ctx.restore();
-}
-
-function renderUI(ctx: CanvasRenderingContext2D, state: GameState, width: number, height: number, time: number) {
-  const { player, score, multiplier, wave, waveAnnounceTime } = state;
-
-  ctx.fillStyle = COLORS.white;
-  ctx.font = 'bold 16px "JetBrains Mono", monospace';
-
-  // Score
-  ctx.textAlign = 'left';
-  ctx.fillText(`SCORE: ${Math.floor(score).toLocaleString()}`, 20, 30);
-
-  // Multiplier
-  if (multiplier > 1) {
-    ctx.fillStyle = COLORS.yellow;
-    ctx.fillText(`×${multiplier.toFixed(1)}`, 20, 55);
-  }
-
-  // Wave
-  ctx.fillStyle = COLORS.white;
-  ctx.textAlign = 'right';
-  ctx.fillText(`WAVE ${wave}`, width - 20, 30);
-
-  // Level
-  ctx.fillText(`LVL ${player.level}`, width - 20, 55);
-
-  // Weapons display (right side)
-  ctx.textAlign = 'right';
-  ctx.font = '12px "JetBrains Mono", monospace';
-  player.weapons.forEach((weapon, idx) => {
-    const config = WEAPON_CONFIGS[weapon.type];
-    const y = 80 + idx * 22;
-    ctx.fillStyle = config.color;
-    ctx.fillText(`${weapon.type.toUpperCase()} Lv${weapon.level}`, width - 20, y);
-  });
-
-  // Health bar
-  const healthBarWidth = 200;
-  const healthBarHeight = 20;
-  const healthX = (width - healthBarWidth) / 2;
-  const healthY = height - 40;
-  const healthPercent = player.health / player.maxHealth;
-
-  ctx.fillStyle = COLORS.dark;
-  ctx.fillRect(healthX, healthY, healthBarWidth, healthBarHeight);
-  ctx.fillStyle = healthPercent > 0.5 ? COLORS.green : healthPercent > 0.25 ? COLORS.yellow : COLORS.pink;
-  ctx.fillRect(healthX, healthY, healthBarWidth * healthPercent, healthBarHeight);
-  ctx.strokeStyle = COLORS.white;
-  ctx.lineWidth = 2;
-  ctx.strokeRect(healthX, healthY, healthBarWidth, healthBarHeight);
-
-  // Health text
-  ctx.fillStyle = COLORS.white;
-  ctx.textAlign = 'center';
-  ctx.fillText(`${Math.floor(player.health)}/${player.maxHealth}`, width / 2, healthY + 15);
-
-  // XP bar
-  const xpBarWidth = 150;
-  const xpBarHeight = 8;
-  const xpX = (width - xpBarWidth) / 2;
-  const xpY = healthY - 20;
-  const xpPercent = player.experience / (DEFAULT_CONFIG.experienceToLevel * player.level);
-
-  ctx.fillStyle = COLORS.dark;
-  ctx.fillRect(xpX, xpY, xpBarWidth, xpBarHeight);
-  ctx.fillStyle = COLORS.cyan;
-  ctx.fillRect(xpX, xpY, xpBarWidth * xpPercent, xpBarHeight);
-
-  // Wave announcement
-  if (waveAnnounceTime) {
-    const elapsed = Date.now() - waveAnnounceTime;
-    if (elapsed < 2000) {
-      const fadeIn = Math.min(1, elapsed / 200);
-      const fadeOut = elapsed > 1500 ? 1 - (elapsed - 1500) / 500 : 1;
-      const alpha = fadeIn * fadeOut;
-      const scale = 1 + Math.sin(elapsed * 0.01) * 0.05;
-      
-      ctx.save();
-      ctx.globalAlpha = alpha;
-      ctx.translate(width / 2, height / 3);
-      ctx.scale(scale, scale);
-      
-      ctx.fillStyle = COLORS.yellow;
-      ctx.font = 'bold 48px "JetBrains Mono", monospace';
-      ctx.textAlign = 'center';
-      ctx.shadowColor = COLORS.yellow;
-      ctx.shadowBlur = 20;
-      ctx.fillText(`WAVE ${wave}`, 0, 0);
-      
-      if (wave % 5 === 0) {
-        ctx.fillStyle = COLORS.pink;
-        ctx.font = 'bold 24px "JetBrains Mono", monospace';
-        ctx.fillText('⚠ BOSS INCOMING ⚠', 0, 40);
-      }
-      
-      ctx.restore();
-    }
-  }
 }

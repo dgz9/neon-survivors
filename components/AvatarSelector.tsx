@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useRef, useCallback } from 'react';
+import Image from 'next/image';
 
 // Preset avatars (emoji-based for simplicity, can be replaced with actual images)
 const PRESET_AVATARS = [
@@ -142,7 +143,7 @@ export default function AvatarSelector({ onSelect, buttonText = '// START GAME' 
           
           {customImage && (
             <div className="w-16 h-16 border-2 border-electric-cyan overflow-hidden">
-              <img src={customImage} alt="Custom" className="w-full h-full object-cover" />
+              <Image src={customImage} alt="Custom" width={64} height={64} className="w-full h-full object-cover" unoptimized />
             </div>
           )}
         </div>

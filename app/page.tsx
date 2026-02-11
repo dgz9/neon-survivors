@@ -104,7 +104,7 @@ export default function Home() {
             <div className="flex items-center gap-4 mb-4 sm:mb-6">
               <div className="h-[2px] flex-1 bg-gradient-to-r from-transparent via-electric-yellow/50 to-transparent" />
               <span className="text-[10px] sm:text-xs font-mono text-electric-yellow/60 tracking-[0.3em] uppercase">
-                Survival Arena v1.1
+                Survival Arena v2.0
               </span>
               <div className="h-[2px] flex-1 bg-gradient-to-r from-transparent via-electric-yellow/50 to-transparent" />
             </div>
@@ -265,13 +265,14 @@ export default function Home() {
               <span className="font-mono text-xs text-white/40 uppercase tracking-wider">Powerups</span>
             </div>
 
-            <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+            <div className="grid grid-cols-2 sm:grid-cols-6 gap-3">
               {[
                 { icon: '❤', name: 'Health', desc: '+25 HP', color: 'text-green-400', border: 'border-green-400/30' },
                 { icon: '⚡', name: 'Speed', desc: '1.5x speed (10s)', color: 'text-yellow-300', border: 'border-yellow-300/30' },
                 { icon: '💥', name: 'Damage', desc: '1.5x damage (10s)', color: 'text-pink-400', border: 'border-pink-400/30' },
                 { icon: '🧲', name: 'Magnet', desc: '3x pickup range (15s)', color: 'text-purple-400', border: 'border-purple-400/30' },
                 { icon: '✨', name: 'XP Boost', desc: '+50 XP', color: 'text-cyan-400', border: 'border-cyan-400/30' },
+                { icon: '💣', name: 'Bomb', desc: 'Clears nearby enemies', color: 'text-orange-400', border: 'border-orange-400/30' },
               ].map((p) => (
                 <div key={p.name} className={`p-3 border ${p.border} bg-brutal-dark text-center`}>
                   <div className="text-xl mb-1">{p.icon}</div>

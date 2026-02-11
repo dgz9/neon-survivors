@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { Users, Copy, Check, Crown, Loader2 } from 'lucide-react';
+import Image from 'next/image';
 import PartySocket from 'partysocket';
 import {
   generateRoomCode,
@@ -243,7 +244,7 @@ export default function Lobby({
                   >
                     <div className="w-10 h-10 border border-white/20 overflow-hidden flex items-center justify-center bg-brutal-black">
                       {player.imageUrl ? (
-                        <img src={player.imageUrl} alt="" className="w-full h-full object-cover" />
+                        <Image src={player.imageUrl} alt="" width={40} height={40} className="w-full h-full object-cover" unoptimized />
                       ) : (
                         <span className="text-2xl">👤</span>
                       )}

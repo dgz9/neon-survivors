@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { LeaderboardEntry } from '@/types/game';
 
 function formatTime(ms: number): string {
@@ -58,11 +58,11 @@ export default function GameOver({
     }
   };
 
-  const submitScore = async () => {
+  const submitScore = useCallback(async () => {
     // Use ref to prevent double submission (React StrictMode calls effects twice)
     if (hasSubmittedRef.current || isSubmitting) return;
     hasSubmittedRef.current = true;
-    
+
     setIsSubmitting(true);
     try {
       const res = await fetch('/api/leaderboard', {
@@ -87,12 +87,12 @@ export default function GameOver({
     } finally {
       setIsSubmitting(false);
     }
-  };
+  }, [playerName, score, wave, kills, isSubmitting]);
 
   // Auto-submit on mount
   useEffect(() => {
     submitScore();
-  }, []);
+  }, [submitScore]);
 
   return (
     <div className="fixed inset-0 bg-brutal-black/95 z-50 overflow-y-auto">
