@@ -22,11 +22,16 @@ const chakraPetch = Chakra_Petch({
 });
 
 export const metadata: Metadata = {
-  title: 'Neon Survivors - Arcade Survival Game',
-  description: 'Survive waves of enemies in this neon-soaked arcade shooter. Climb the leaderboard!',
+  title: 'Neon Bit - Arcade Survival Game',
+  description: 'Neon Bit (formerly Neon Survivors): survive waves of enemies in this neon-soaked arcade shooter and climb the leaderboard.',
+  keywords: ['Neon Bit', 'Neon Survivors', 'arcade survival', 'bullet heaven', 'indie game'],
+  icons: {
+    icon: '/icon.png',
+    apple: '/apple-icon.png',
+  },
   openGraph: {
-    title: 'Neon Survivors',
-    description: 'Survive waves of enemies in this neon-soaked arcade shooter.',
+    title: 'Neon Bit',
+    description: 'Neon Bit (formerly Neon Survivors): survive waves of enemies in this neon-soaked arcade shooter.',
     type: 'website',
   },
 };

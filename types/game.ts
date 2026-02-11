@@ -173,6 +173,8 @@ export interface GameState {
   activeEvent?: WaveEventType;
   eventUntil?: number;
   eventAnnounceTime?: number;
+  bombPulseAt?: number;
+  bombPulseOrigin?: Vector2;
   // Stats tracking
   totalDamageDealt: number;
   totalDamageTaken: number;

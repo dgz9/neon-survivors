@@ -111,8 +111,8 @@ export default function Home() {
 
             {/* Main title */}
             <div className="relative">
-              <h1 className="brutal-title glitch-text" data-text="NEON SURVIVORS">
-                NEON SURVIVORS
+              <h1 className="brutal-title glitch-text" data-text="NEON BIT">
+                NEON BIT
               </h1>
 
               {/* Subtitle with slashes */}

@@ -773,9 +773,9 @@ export function updateGameState(
       }
 
       // Fire/debris particles radiating outward
-      for (let fi = 0; fi < 45; fi++) {
-        const angle = (fi / 45) * Math.PI * 2 + Math.random() * 0.3;
-        const speed = 4 + Math.random() * 8;
+      for (let fi = 0; fi < 64; fi++) {
+        const angle = (fi / 64) * Math.PI * 2 + Math.random() * 0.35;
+        const speed = 5 + Math.random() * 10;
         const fp = particlePool.acquire();
         fp.id = generateId();
         fp.position.x = player.position.x + (Math.random() - 0.5) * 10;
@@ -784,9 +784,43 @@ export function updateGameState(
         fp.velocity.y = Math.sin(angle) * speed;
         fp.color = fi % 3 === 0 ? COLORS.yellow : fi % 3 === 1 ? COLORS.orange : COLORS.white;
         fp.size = 4 + Math.random() * 5;
-        fp.life = 300 + Math.random() * 200;
-        fp.maxLife = 500;
+        fp.life = 320 + Math.random() * 220;
+        fp.maxLife = 540;
         fp.type = fi % 4 === 0 ? 'trail' : 'explosion';
+      }
+
+      // Fast spark burst for crisp arcade readability
+      for (let si = 0; si < 24; si++) {
+        const angle = (si / 24) * Math.PI * 2 + Math.random() * 0.45;
+        const speed = 10 + Math.random() * 14;
+        const sp = particlePool.acquire();
+        sp.id = generateId();
+        sp.position.x = player.position.x;
+        sp.position.y = player.position.y;
+        sp.velocity.x = Math.cos(angle) * speed;
+        sp.velocity.y = Math.sin(angle) * speed;
+        sp.color = si % 3 === 0 ? COLORS.white : si % 2 === 0 ? COLORS.yellow : COLORS.orange;
+        sp.size = 2 + Math.random() * 2;
+        sp.life = 220 + Math.random() * 150;
+        sp.maxLife = 370;
+        sp.type = 'spark';
+      }
+
+      // Spoke trails to emphasize blast directionality
+      for (let ti = 0; ti < 12; ti++) {
+        const angle = (ti / 12) * Math.PI * 2;
+        const speed = 8 + Math.random() * 6;
+        const tp = particlePool.acquire();
+        tp.id = generateId();
+        tp.position.x = player.position.x;
+        tp.position.y = player.position.y;
+        tp.velocity.x = Math.cos(angle) * speed;
+        tp.velocity.y = Math.sin(angle) * speed;
+        tp.color = ti % 2 === 0 ? COLORS.orange : COLORS.yellow;
+        tp.size = 10 + Math.random() * 4;
+        tp.life = 230 + Math.random() * 120;
+        tp.maxLife = 350;
+        tp.type = 'trail';
       }
 
       // Tinted center pulse instead of full white flash
@@ -837,8 +871,10 @@ export function updateGameState(
         ...state,
         screenFlash: currentTime,
         screenFlashColor: '255, 170, 45',
-        slowMoUntil: currentTime + 110,
-        slowMoFactor: 0.16,
+        slowMoUntil: currentTime + 160,
+        slowMoFactor: 0.14,
+        bombPulseAt: currentTime,
+        bombPulseOrigin: { x: player.position.x, y: player.position.y },
       };
     }
     player = applyPowerup(player, powerup, currentTime);

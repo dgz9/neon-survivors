@@ -184,9 +184,23 @@ export function getUnlockedAchievements(): Set<string> {
   if (typeof window === 'undefined') return new Set();
   
   try {
-    const saved = localStorage.getItem('neon-survivors-achievements');
+    const saved = localStorage.getItem('neon-bit-achievements');
     if (saved) {
-      return new Set(JSON.parse(saved));
+      const parsed = JSON.parse(saved) as unknown;
+      if (Array.isArray(parsed)) {
+        return new Set(parsed.filter((v): v is string => typeof v === 'string'));
+      }
+    }
+
+    // One-time fallback for older storage key from previous game name.
+    const legacySaved = localStorage.getItem('neon-survivors-achievements');
+    if (legacySaved) {
+      const parsedLegacy = JSON.parse(legacySaved) as unknown;
+      if (Array.isArray(parsedLegacy)) {
+        const migrated = new Set(parsedLegacy.filter((v): v is string => typeof v === 'string'));
+        localStorage.setItem('neon-bit-achievements', JSON.stringify(Array.from(migrated)));
+        return migrated;
+      }
     }
   } catch (e) {
     console.warn('Failed to load achievements');
@@ -201,7 +215,7 @@ export function unlockAchievement(id: string): void {
   try {
     const unlocked = getUnlockedAchievements();
     unlocked.add(id);
-    localStorage.setItem('neon-survivors-achievements', JSON.stringify(Array.from(unlocked)));
+    localStorage.setItem('neon-bit-achievements', JSON.stringify(Array.from(unlocked)));
   } catch (e) {
     console.warn('Failed to save achievement');
   }

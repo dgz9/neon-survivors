@@ -1,4 +1,4 @@
-# Neon Survivors
+# Neon Bit
 
 A Vampire Survivors-style arcade shooter with brutalist neon aesthetics. Now with **co-op multiplayer**!
 
@@ -35,7 +35,7 @@ Co-op multiplayer requires a PartyKit server:
    ```
 
 2. **Update Environment**
-   - Set `NEXT_PUBLIC_PARTYKIT_HOST` to your PartyKit URL (e.g., `neon-survivors.username.partykit.dev`)
+   - Set `NEXT_PUBLIC_PARTYKIT_HOST` to your PartyKit URL (e.g., `neonbit.username.partykit.dev`)
 
 ## Local Development
 
