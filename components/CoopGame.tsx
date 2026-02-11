@@ -18,7 +18,7 @@ import {
 } from '@/lib/gameEngine';
 import { Upgrade } from '@/types/game';
 import { sendInput, sendGameState, decodeGameState, MultiplayerMessage, MultiplayerPlayer } from '@/lib/multiplayer';
-import { playLevelUp, playDamage, playWaveComplete, setMuted } from '@/lib/audio';
+import { playLevelUp, playDamage, playWaveComplete, setMuted, isMuted, startMatchMusic, stopMatchMusic } from '@/lib/audio';
 import { CoopGameScene } from './three/CoopGameScene';
 import { CoopOverlay } from './three/CoopOverlay';
 import { TextParticles } from './three/TextParticles';
@@ -206,7 +206,7 @@ export default function CoopGame({
   } | null>(null);
   const [showUpgrades, setShowUpgrades] = useState(false);
   const [availableUpgrades, setAvailableUpgrades] = useState<Upgrade[]>([]);
-  const [soundEnabled, setSoundEnabled] = useState(true);
+  const [soundEnabled, setSoundEnabled] = useState(() => !isMuted());
   const [myUpgradeChoice, setMyUpgradeChoice] = useState<string | null>(null);
   const [otherUpgradeChoice, setOtherUpgradeChoice] = useState<string | null>(null);
   const [otherUpgradeName, setOtherUpgradeName] = useState<string | null>(null);
@@ -385,6 +385,16 @@ export default function CoopGame({
       initGame();
     }
   }, [initGame, dimensions.width, dimensions.height]);
+
+  useEffect(() => {
+    setSoundEnabled(!isMuted());
+  }, []);
+
+  useEffect(() => {
+    if (isLoading) return;
+    startMatchMusic();
+    return () => stopMatchMusic();
+  }, [isLoading]);
 
   // Pending state for guest init
   const pendingGameStateRef = useRef<{
@@ -1140,7 +1150,13 @@ export default function CoopGame({
 
         <div className="flex items-center gap-4">
           <button
-            onClick={() => { setSoundEnabled(s => { setMuted(!s); return !s; }); }}
+            onClick={() => {
+              setSoundEnabled(s => {
+                const next = !s;
+                setMuted(!next);
+                return next;
+              });
+            }}
             className="font-mono text-xs uppercase tracking-wider text-white/40 hover:text-electric-cyan transition-colors"
           >
             {soundEnabled ? '\uD83D\uDD0A' : '\uD83D\uDD07'}

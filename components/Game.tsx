@@ -21,7 +21,10 @@ import {
   playStreak,
   playNearMiss,
   playEventStart,
-  setMuted
+  setMuted,
+  isMuted,
+  startMatchMusic,
+  stopMatchMusic,
 } from '@/lib/audio';
 import { checkAchievements, AchievementStats } from '@/lib/achievements';
 import { GameScene } from './three/GameScene';
@@ -83,7 +86,7 @@ export default function Game({ playerImageUrl, playerName, arena = 'grid', onGam
   const [showUpgrades, setShowUpgrades] = useState(false);
   const [availableUpgrades, setAvailableUpgrades] = useState<Upgrade[]>([]);
   const [showPowerupLegend, setShowPowerupLegend] = useState(false);
-  const [soundEnabled, setSoundEnabled] = useState(true);
+  const [soundEnabled, setSoundEnabled] = useState(() => !isMuted());
   const [playerImage, setPlayerImage] = useState<HTMLImageElement | null>(null);
 
   const gamepadIndexRef = useRef<number | null>(null);
@@ -132,6 +135,16 @@ export default function Game({ playerImageUrl, playerName, arena = 'grid', onGam
       initGame();
     }
   }, [initGame, dimensions.width, dimensions.height]);
+
+  useEffect(() => {
+    setSoundEnabled(!isMuted());
+  }, []);
+
+  useEffect(() => {
+    if (isLoading) return;
+    startMatchMusic();
+    return () => stopMatchMusic();
+  }, [isLoading]);
 
   // Handle upgrade selection
   const handleUpgrade = useCallback((upgrade: Upgrade) => {
@@ -431,8 +444,9 @@ export default function Game({ playerImageUrl, playerName, arena = 'grid', onGam
           <button
             onClick={() => {
               setSoundEnabled(s => {
-                setMuted(!s);
-                return !s;
+                const next = !s;
+                setMuted(!next);
+                return next;
               });
             }}
             className="font-mono text-xs uppercase tracking-wider text-white/40 hover:text-electric-cyan transition-colors"

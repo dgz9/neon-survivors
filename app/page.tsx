@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import AvatarSelector from '@/components/AvatarSelector';
 import Game from '@/components/Game';
 import CoopGame from '@/components/CoopGame';
@@ -10,6 +10,7 @@ import Lobby from '@/components/Lobby';
 import { Trophy, Users, User } from 'lucide-react';
 import PartySocket from 'partysocket';
 import { MultiplayerPlayer } from '@/lib/multiplayer';
+import { isMuted, setMuted } from '@/lib/audio';
 
 type GamePhase = 'menu' | 'lobby' | 'playing' | 'playing-coop' | 'gameover';
 type GameMode = 'solo' | 'coop';
@@ -34,11 +35,22 @@ export default function Home() {
   }>({ score: 0, wave: 1, kills: 0 });
   const [selectedArena, setSelectedArena] = useState<'void' | 'grid' | 'cyber' | 'neon'>('grid');
   const [showLeaderboard, setShowLeaderboard] = useState(false);
+  const [soundEnabled, setSoundEnabled] = useState(() => !isMuted());
   
   // Co-op state
   const [coopSocket, setCoopSocket] = useState<PartySocket | null>(null);
   const [coopPlayers, setCoopPlayers] = useState<MultiplayerPlayer[]>([]);
   const [isCoopHost, setIsCoopHost] = useState(false);
+
+  useEffect(() => {
+    setSoundEnabled(!isMuted());
+  }, []);
+
+  useEffect(() => {
+    if (phase === 'menu') {
+      setSoundEnabled(!isMuted());
+    }
+  }, [phase]);
 
   const handleStartGame = useCallback((imageUrl: string, name: string) => {
     setPlayerImageUrl(imageUrl);
@@ -98,6 +110,20 @@ export default function Home() {
     <div className="min-h-screen bg-brutal-black text-white">
       {phase === 'menu' && (
         <div className="flex flex-col items-center justify-start p-4 sm:p-8 min-h-screen">
+          <div className="w-full max-w-4xl flex justify-end mb-2">
+            <button
+              onClick={() => {
+                setSoundEnabled(s => {
+                  const next = !s;
+                  setMuted(!next);
+                  return next;
+                });
+              }}
+              className="font-mono text-xs uppercase tracking-wider border border-white/20 px-3 py-1 text-white/60 hover:text-electric-cyan hover:border-electric-cyan/60 transition-colors"
+            >
+              {soundEnabled ? '🔊 SOUND ON' : '🔇 SOUND OFF'}
+            </button>
+          </div>
           {/* Header */}
           <header className="text-center mb-6 sm:mb-10 mt-6 sm:mt-8 relative z-10 w-full max-w-4xl">
             {/* Top accent line */}
