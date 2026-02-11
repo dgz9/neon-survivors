@@ -142,7 +142,7 @@ export default function Lobby({
           <div className="text-center mb-8">
             <div className="flex items-center justify-center gap-3 mb-4">
               <Users className="w-8 h-8 text-electric-cyan" />
-              <h2 className="font-display text-3xl text-electric-cyan">CO-OP MODE</h2>
+              <h2 className="font-menu text-3xl text-electric-cyan">CO-OP MODE</h2>
             </div>
             <p className="font-mono text-sm text-white/60">
               Team up with a friend and survive together!
@@ -151,7 +151,7 @@ export default function Lobby({
 
           <button
             onClick={handleCreateRoom}
-            className="w-full py-4 font-display text-xl uppercase tracking-wider bg-electric-cyan text-brutal-black hover:bg-white transition-colors"
+            className="w-full py-4 font-menu text-xl uppercase tracking-wider bg-electric-cyan text-brutal-black hover:bg-white transition-colors"
           >
             Create Room
           </button>
@@ -174,7 +174,7 @@ export default function Lobby({
             <button
               onClick={handleJoinRoom}
               disabled={joinCode.length !== 4}
-              className={`w-full py-4 font-display text-xl uppercase tracking-wider border-2 transition-colors ${
+              className={`w-full py-4 font-menu text-xl uppercase tracking-wider border-2 transition-colors ${
                 joinCode.length === 4
                   ? 'border-electric-pink text-electric-pink hover:bg-electric-pink hover:text-brutal-black'
                   : 'border-white/20 text-white/30 cursor-not-allowed'
@@ -205,7 +205,7 @@ export default function Lobby({
               Room Code
             </p>
             <div className="flex items-center justify-center gap-3">
-              <span className="font-display text-5xl tracking-[0.3em] text-electric-yellow">
+              <span className="font-menu text-5xl tracking-[0.3em] text-electric-yellow">
                 {roomCode || '----'}
               </span>
               <button
@@ -280,7 +280,7 @@ export default function Lobby({
             <button
               onClick={handleStartGame}
               disabled={players.length < 2}
-              className={`w-full py-4 font-display text-xl uppercase tracking-wider transition-colors ${
+              className={`w-full py-4 font-menu text-xl uppercase tracking-wider transition-colors ${
                 players.length >= 2
                   ? 'bg-electric-green text-brutal-black hover:bg-white'
                   : 'bg-white/10 text-white/30 cursor-not-allowed'

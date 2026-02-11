@@ -11,7 +11,7 @@ import { XPOrbInstances } from './XPOrbInstances';
 import { ParticleSystem } from './ParticleSystem';
 import { ArenaBackground } from './ArenaBackground';
 import { ScreenEffects } from './ScreenEffects';
-import { EffectComposer, Bloom } from '@react-three/postprocessing';
+import { PostFX } from './PostFX';
 
 interface GameSceneProps {
   gameStateRef: React.RefObject<GameState | null>;
@@ -44,14 +44,7 @@ export function GameScene({ gameStateRef, playerImage }: GameSceneProps) {
         <PlayerMesh gameStateRef={gameStateRef} playerImage={playerImage} />
         <ScreenEffects gameStateRef={gameStateRef} />
       </SceneRoot>
-      <EffectComposer>
-        <Bloom
-          luminanceThreshold={0.3}
-          luminanceSmoothing={0.9}
-          intensity={1.5}
-          mipmapBlur
-        />
-      </EffectComposer>
+      <PostFX gameStateRef={gameStateRef} />
     </>
   );
 }

@@ -24,7 +24,12 @@ body {
 
 /* Font families */
 .font-display {
-  font-family: 'Orbitron', sans-serif;
+  font-family: var(--font-display), 'Orbitron', sans-serif;
+}
+
+.font-menu {
+  font-family: var(--font-menu), var(--font-display), 'Orbitron', sans-serif;
+  letter-spacing: 0.03em;
 }
 
 .font-mono {
@@ -33,7 +38,7 @@ body {
 
 /* Brutal title styling */
 .brutal-title {
-  font-family: 'Orbitron', sans-serif;
+  font-family: var(--font-menu), var(--font-display), 'Orbitron', sans-serif;
   font-size: clamp(2rem, 8vw, 5rem);
   font-weight: 900;
   letter-spacing: -0.02em;

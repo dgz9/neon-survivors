@@ -196,6 +196,10 @@ export default function CoopGame({
     experience: number;
     experienceToLevel: number;
     multiplier: number;
+    killStreak: number;
+    nearMissCount: number;
+    activeEvent?: string;
+    eventAnnounceTime?: number;
     weapons: { type: string; level: number }[];
     waveAnnounceTime?: number;
     gameTime: number;
@@ -1046,6 +1050,10 @@ export default function CoopGame({
             level: gs.player.level, experience: gs.player.experience,
             experienceToLevel: DEFAULT_CONFIG.experienceToLevel * gs.player.level,
             multiplier: gs.multiplier,
+            killStreak: gs.killStreak,
+            nearMissCount: gs.nearMissCount,
+            activeEvent: gs.activeEvent,
+            eventAnnounceTime: gs.eventAnnounceTime,
             weapons: gs.player.weapons.map(w => ({ type: w.type, level: w.level })),
             waveAnnounceTime: gs.waveAnnounceTime, gameTime: gs.gameTime,
           });
@@ -1258,6 +1266,9 @@ export default function CoopGame({
           experience: displayState.experience,
           experienceToLevel: displayState.experienceToLevel,
           multiplier: displayState.multiplier,
+          killStreak: displayState.killStreak,
+          activeEvent: displayState.activeEvent,
+          eventAnnounceTime: displayState.eventAnnounceTime,
           weapons: displayState.weapons,
           waveAnnounceTime: displayState.waveAnnounceTime,
           gameTime: displayState.gameTime,

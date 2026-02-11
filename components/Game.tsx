@@ -10,7 +10,19 @@ import {
   updateGameState,
   applyUpgrade,
 } from '@/lib/gameEngine';
-import { playShoot, playHit, playExplosion, playLevelUp, playDamage, playWaveComplete, setMuted } from '@/lib/audio';
+import {
+  playHit,
+  playExplosion,
+  playLevelUp,
+  playDamage,
+  playWaveComplete,
+  playWeaponFire,
+  playWeaponImpact,
+  playStreak,
+  playNearMiss,
+  playEventStart,
+  setMuted
+} from '@/lib/audio';
 import { checkAchievements, AchievementStats } from '@/lib/achievements';
 import { GameScene } from './three/GameScene';
 import { TextParticles } from './three/TextParticles';
@@ -59,6 +71,10 @@ export default function Game({ playerImageUrl, playerName, arena = 'grid', onGam
     speedBonus: number;
     magnetBonus: number;
     multiplier: number;
+    killStreak: number;
+    nearMissCount: number;
+    activeEvent?: string;
+    eventAnnounceTime?: number;
     weapons: { type: string; level: number }[];
     activeBuffs: { type: string; remainingMs: number }[];
     waveAnnounceTime?: number;
@@ -75,7 +91,10 @@ export default function Game({ playerImageUrl, playerName, arena = 'grid', onGam
   const lastWaveRef = useRef<number>(1);
   const lastHealthRef = useRef<number>(100);
   const lastKillsRef = useRef<number>(0);
-  const shootSoundThrottle = useRef<number>(0);
+  const lastWeaponFireRef = useRef<Record<string, number>>({});
+  const lastNearMissRef = useRef<number>(0);
+  const lastEventRef = useRef<string | undefined>(undefined);
+  const lastStreakRef = useRef<number>(0);
 
   // Handle resize
   useEffect(() => {
@@ -274,6 +293,10 @@ export default function Game({ playerImageUrl, playerName, arena = 'grid', onGam
             speedBonus: gs.player.speedBonus,
             magnetBonus: gs.player.magnetBonus,
             multiplier: gs.multiplier,
+            killStreak: gs.killStreak,
+            nearMissCount: gs.nearMissCount,
+            activeEvent: gs.activeEvent,
+            eventAnnounceTime: gs.eventAnnounceTime,
             weapons: gs.player.weapons.map(w => ({ type: w.type, level: w.level })),
             activeBuffs: gs.player.activeBuffs.map(b => ({
               type: b.type,
@@ -307,15 +330,34 @@ export default function Game({ playerImageUrl, playerName, arena = 'grid', onGam
         if (gs.player.kills > lastKillsRef.current) {
           const killDiff = gs.player.kills - lastKillsRef.current;
           if (killDiff > 0) {
-            playHit();
+            const preferredWeapon = gs.player.weapons[gs.player.weapons.length - 1]?.type || 'blaster';
+            playWeaponImpact(preferredWeapon);
             if (killDiff > 2) playExplosion();
           }
         }
         lastKillsRef.current = gs.player.kills;
 
-        if (gs.projectileCount > 0 && timestamp - shootSoundThrottle.current > 150) {
-          shootSoundThrottle.current = timestamp;
-          playShoot();
+        if (gs.killStreak > 0 && gs.killStreak !== lastStreakRef.current && gs.killStreak % 5 === 0) {
+          playStreak(gs.killStreak);
+        }
+        lastStreakRef.current = gs.killStreak;
+
+        if (gs.nearMissCount > lastNearMissRef.current) {
+          playNearMiss();
+        }
+        lastNearMissRef.current = gs.nearMissCount;
+
+        if (gs.activeEvent && gs.activeEvent !== lastEventRef.current) {
+          playEventStart(gs.activeEvent);
+        }
+        lastEventRef.current = gs.activeEvent;
+
+        for (const weapon of gs.player.weapons) {
+          const prevFired = lastWeaponFireRef.current[weapon.type] || 0;
+          if (weapon.lastFired > prevFired) {
+            playWeaponFire(weapon.type);
+            lastWeaponFireRef.current[weapon.type] = weapon.lastFired;
+          }
         }
       }
 

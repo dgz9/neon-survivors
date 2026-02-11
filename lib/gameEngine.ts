@@ -17,6 +17,7 @@ import {
   EnemyType,
   WeaponType,
   PowerUpType,
+  WaveEventType,
 } from '@/types/game';
 import { createParticlePool, createProjectilePool, createXPOrbPool } from './objectPool';
 import { SpatialGrid } from './spatialGrid';
@@ -110,6 +111,9 @@ export function createInitialGameState(
     enemiesKilledThisWave: 0,
     enemiesRequiredForWave: 10,
     screenShake: 0,
+    killStreak: 0,
+    killStreakTimer: 0,
+    nearMissCount: 0,
     pendingLevelUps: 0,
     availableUpgrades: [],
     totalDamageDealt: 0,
@@ -174,7 +178,21 @@ export function updateGameState(
   if (state.slowMoUntil && currentTime < state.slowMoUntil) {
     effectiveDelta *= state.slowMoFactor || 0.3;
   }
-  let { player, enemies, powerups, score, multiplier, multiplierTimer, screenShake, totalDamageDealt } = state;
+  let {
+    player,
+    enemies,
+    powerups,
+    score,
+    multiplier,
+    multiplierTimer,
+    screenShake,
+    totalDamageDealt,
+    killStreak,
+    killStreakTimer,
+    nearMissCount,
+  } = state;
+
+  const eventActive = !!(state.activeEvent && state.eventUntil && currentTime < state.eventUntil);
 
   // Update player position based on input
   const oldPos = { ...player.position };
@@ -204,35 +222,7 @@ export function updateGameState(
     updateProjectileInPlace(proj, effectiveDelta, player.position);
     if (!isProjectileAlive(proj, width, height)) return false; // release
 
-    // Missile smoke trail
-    if (proj.weaponType === 'missile' && !proj.orbit) {
-      const tp = particlePool.acquire();
-      tp.id = generateId();
-      tp.position.x = proj.position.x - proj.velocity.x * 0.3 + (Math.random() - 0.5) * 4;
-      tp.position.y = proj.position.y - proj.velocity.y * 0.3 + (Math.random() - 0.5) * 4;
-      tp.velocity.x = -proj.velocity.x * 0.05 + (Math.random() - 0.5) * 1.5;
-      tp.velocity.y = -proj.velocity.y * 0.05 + (Math.random() - 0.5) * 1.5;
-      tp.color = COLORS.orange;
-      tp.size = 4 + Math.random() * 3;
-      tp.life = 200 + Math.random() * 100;
-      tp.maxLife = 300;
-      tp.type = 'explosion';
-
-      // Secondary grey smoke
-      if (Math.random() < 0.5) {
-        const sp = particlePool.acquire();
-        sp.id = generateId();
-        sp.position.x = proj.position.x - proj.velocity.x * 0.5 + (Math.random() - 0.5) * 6;
-        sp.position.y = proj.position.y - proj.velocity.y * 0.5 + (Math.random() - 0.5) * 6;
-        sp.velocity.x = (Math.random() - 0.5) * 0.8;
-        sp.velocity.y = (Math.random() - 0.5) * 0.8 - 0.5;
-        sp.color = '#888888';
-        sp.size = 5 + Math.random() * 4;
-        sp.life = 300 + Math.random() * 200;
-        sp.maxLife = 500;
-        sp.type = 'spark';
-      }
-    }
+    emitProjectileSignatureTrail(proj);
 
     return true; // keep
   });
@@ -250,6 +240,35 @@ export function updateGameState(
     player.kills++;
     multiplier = Math.min(multiplier + 0.1, 10);
     multiplierTimer = currentTime + 3000;
+    killStreak = currentTime <= killStreakTimer ? killStreak + 1 : 1;
+    killStreakTimer = currentTime + 2200;
+
+    if (killStreak === 5 || killStreak === 10 || killStreak === 20) {
+      const kp = particlePool.acquire();
+      kp.id = generateId();
+      kp.position.x = player.position.x;
+      kp.position.y = player.position.y - 30;
+      kp.velocity.x = 0;
+      kp.velocity.y = -2.2;
+      kp.color = killStreak >= 10 ? COLORS.pink : COLORS.yellow;
+      kp.size = killStreak >= 10 ? 26 : 20;
+      kp.life = 900;
+      kp.maxLife = 900;
+      kp.type = 'text';
+      kp.text = `${killStreak} STREAK`;
+
+      const kr = particlePool.acquire();
+      kr.id = generateId();
+      kr.position.x = player.position.x;
+      kr.position.y = player.position.y;
+      kr.velocity.x = 0;
+      kr.velocity.y = 0;
+      kr.color = killStreak >= 10 ? COLORS.pink : COLORS.yellow;
+      kr.size = 70;
+      kr.life = 220;
+      kr.maxLife = 220;
+      kr.type = 'ring';
+    }
 
     // Spawn experience orb
     const orb = xpOrbPool.acquire();
@@ -294,6 +313,43 @@ export function updateGameState(
     // Death particles - scaled by enemy size
     createExplosion(enemy.position, enemy.color, 25 + Math.floor(enemy.radius * 1.2));
 
+    if (enemy.isElite) {
+      const eliteRing = particlePool.acquire();
+      eliteRing.id = generateId();
+      eliteRing.position.x = enemy.position.x;
+      eliteRing.position.y = enemy.position.y;
+      eliteRing.velocity.x = 0;
+      eliteRing.velocity.y = 0;
+      eliteRing.color = enemy.color;
+      eliteRing.size = 32 + enemy.radius;
+      eliteRing.life = 260;
+      eliteRing.maxLife = 260;
+      eliteRing.type = 'ring';
+
+      if (enemy.eliteModifier === 'volatile') {
+        screenShake = Math.max(screenShake, 18);
+        state = {
+          ...state,
+          screenFlash: currentTime,
+          screenFlashColor: '255, 107, 26',
+        };
+        for (let i = 0; i < 16; i++) {
+          const a = (i / 16) * Math.PI * 2;
+          const vp = particlePool.acquire();
+          vp.id = generateId();
+          vp.position.x = enemy.position.x;
+          vp.position.y = enemy.position.y;
+          vp.velocity.x = Math.cos(a) * (7 + Math.random() * 4);
+          vp.velocity.y = Math.sin(a) * (7 + Math.random() * 4);
+          vp.color = COLORS.orange;
+          vp.size = 6 + Math.random() * 3;
+          vp.life = 240 + Math.random() * 120;
+          vp.maxLife = 360;
+          vp.type = 'explosion';
+        }
+      }
+    }
+
     // Expanding death ring for all enemies
     const deathRp = particlePool.acquire();
     deathRp.id = generateId();
@@ -326,6 +382,13 @@ export function updateGameState(
 
     // Extra death effects for bigger enemies / bosses
     if (enemy.radius > 20 || enemy.type === 'boss') {
+      // Brief hit-stop to make elite/boss kills land.
+      state = {
+        ...state,
+        slowMoUntil: currentTime + 80,
+        slowMoFactor: 0.18,
+      };
+
       for (let i = 0; i < 3; i++) {
         const rp = particlePool.acquire();
         rp.id = generateId();
@@ -379,9 +442,55 @@ export function updateGameState(
   if (currentTime > multiplierTimer) {
     multiplier = Math.max(1, multiplier - 0.01 * deltaTime);
   }
+  if (currentTime > killStreakTimer) {
+    killStreak = 0;
+  }
 
   // Update enemies
-  enemies = enemies.map(e => updateEnemy(e, player, effectiveDelta, currentTime, player2));
+  enemies = enemies.map(e => updateEnemy(e, player, effectiveDelta, currentTime, player2, eventActive ? state.activeEvent : undefined));
+
+  // Near-miss reward: enemy grazes the player but does not hit.
+  const nearMissCooldown = 650;
+  if (!state.lastNearMissTime || currentTime - state.lastNearMissTime > nearMissCooldown) {
+    let nearMissDetected = false;
+    for (let i = 0; i < enemies.length; i++) {
+      const e = enemies[i];
+      const dx = player.position.x - e.position.x;
+      const dy = player.position.y - e.position.y;
+      const d = Math.sqrt(dx * dx + dy * dy);
+      const hitDist = player.radius + e.radius;
+      if (d > hitDist + 8 && d < hitDist + 26) {
+        nearMissDetected = true;
+        break;
+      }
+    }
+
+    if (nearMissDetected) {
+      nearMissCount += 1;
+      multiplier = Math.min(10, multiplier + 0.03);
+      multiplierTimer = Math.max(multiplierTimer, currentTime + 1200);
+      screenShake = Math.max(screenShake, 6);
+      state = {
+        ...state,
+        lastNearMissTime: currentTime,
+      };
+
+      if (nearMissCount % 4 === 0) {
+        const nm = particlePool.acquire();
+        nm.id = generateId();
+        nm.position.x = player.position.x;
+        nm.position.y = player.position.y - 26;
+        nm.velocity.x = 0;
+        nm.velocity.y = -1.9;
+        nm.color = COLORS.cyan;
+        nm.size = 18;
+        nm.life = 650;
+        nm.maxLife = 650;
+        nm.type = 'text';
+        nm.text = 'NEAR MISS';
+      }
+    }
+  }
 
   // Check enemy-player collision
   const collision = checkEnemyPlayerCollision(enemies, player, currentTime);
@@ -397,6 +506,8 @@ export function updateGameState(
       screenFlash: currentTime,
       screenFlashColor: '255, 45, 106',
       totalDamageTaken: state.totalDamageTaken + collision.damage,
+      slowMoUntil: currentTime + 70,
+      slowMoFactor: 0.22,
     };
 
     // Floating damage number - large and prominent
@@ -643,10 +754,10 @@ export function updateGameState(
       enemies = survivingEnemies;
       state = { ...state, enemiesKilledThisWave: state.enemiesKilledThisWave + bombKills };
 
-      // Shockwave rings (orange, yellow, white)
-      const ringColors = [COLORS.orange, COLORS.yellow, COLORS.white];
-      const ringSizes = [bombRadius * 0.8, bombRadius * 0.55, bombRadius * 0.35];
-      const ringLives = [500, 400, 300];
+      // Shockwave rings (warm palette, reduced washout)
+      const ringColors = [COLORS.orange, COLORS.yellow, COLORS.pink];
+      const ringSizes = [bombRadius * 0.72, bombRadius * 0.5, bombRadius * 0.3];
+      const ringLives = [430, 340, 260];
       for (let ri = 0; ri < 3; ri++) {
         const sr = particlePool.acquire();
         sr.id = generateId();
@@ -678,17 +789,17 @@ export function updateGameState(
         fp.type = fi % 4 === 0 ? 'trail' : 'explosion';
       }
 
-      // Bright white center flash
+      // Tinted center pulse instead of full white flash
       const cf = particlePool.acquire();
       cf.id = generateId();
       cf.position.x = player.position.x;
       cf.position.y = player.position.y;
       cf.velocity.x = 0;
       cf.velocity.y = 0;
-      cf.color = COLORS.white;
-      cf.size = bombRadius * 0.3;
-      cf.life = 150;
-      cf.maxLife = 150;
+      cf.color = COLORS.yellow;
+      cf.size = bombRadius * 0.2;
+      cf.life = 110;
+      cf.maxLife = 110;
       cf.type = 'ring';
 
       // "BOMB!" text - bright yellow-green to feel positive
@@ -721,8 +832,14 @@ export function updateGameState(
         kt.text = `x${bombKills} KILLS`;
       }
 
-      screenShake = 30;
-      state = { ...state, screenFlash: currentTime, screenFlashColor: '228, 255, 26' };
+      screenShake = 20;
+      state = {
+        ...state,
+        screenFlash: currentTime,
+        screenFlashColor: '255, 170, 45',
+        slowMoUntil: currentTime + 110,
+        slowMoFactor: 0.16,
+      };
     }
     player = applyPowerup(player, powerup, currentTime);
   });
@@ -742,8 +859,16 @@ export function updateGameState(
   // Update buff timers and recalculate stats
   player = updatePlayerBuffs(player, currentTime);
 
+  // Wave event modifiers
+  if (eventActive && state.activeEvent === 'magnet_storm') {
+    player = { ...player, magnetMultiplier: player.magnetMultiplier * 1.6 };
+  }
+
   // Spawn enemies
-  const spawnInterval = config.enemySpawnRate / (1 + state.wave * 0.2);
+  let spawnInterval = config.enemySpawnRate / (1 + state.wave * 0.2);
+  if (eventActive && state.activeEvent === 'surge') {
+    spawnInterval *= 0.72;
+  }
   if (currentTime - state.lastEnemySpawn > spawnInterval) {
     const spawnCount = Math.min(1 + Math.floor(state.wave / 3), 5);
     for (let i = 0; i < spawnCount; i++) {
@@ -756,12 +881,19 @@ export function updateGameState(
   // Check wave completion
   if (state.enemiesKilledThisWave >= state.enemiesRequiredForWave) {
     const newWave = state.wave + 1;
+    const shouldStartEvent = newWave >= 4 && newWave % 4 === 0;
+    const nextEvent: WaveEventType | undefined = shouldStartEvent
+      ? (Math.random() < 0.5 ? 'surge' : 'magnet_storm')
+      : undefined;
     state = {
       ...state,
       wave: newWave,
       enemiesKilledThisWave: 0,
       enemiesRequiredForWave: Math.floor(state.enemiesRequiredForWave * 1.2),
       waveAnnounceTime: currentTime,
+      activeEvent: nextEvent ?? state.activeEvent,
+      eventUntil: nextEvent ? currentTime + 9000 : state.eventUntil,
+      eventAnnounceTime: nextEvent ? currentTime : state.eventAnnounceTime,
     };
 
     // Wave celebration particles
@@ -785,6 +917,31 @@ export function updateGameState(
     if (newWave % 5 === 0) {
       enemies.push(spawnBoss(width, height, player.position));
     }
+
+    if (nextEvent) {
+      const ep = particlePool.acquire();
+      ep.id = generateId();
+      ep.position.x = width / 2;
+      ep.position.y = height * 0.35;
+      ep.velocity.x = 0;
+      ep.velocity.y = -1.4;
+      ep.color = nextEvent === 'surge' ? COLORS.pink : COLORS.cyan;
+      ep.size = 30;
+      ep.life = 1400;
+      ep.maxLife = 1400;
+      ep.type = 'text';
+      ep.text = nextEvent === 'surge' ? 'SURGE MODE' : 'MAGNET STORM';
+
+      state = {
+        ...state,
+        screenFlash: currentTime,
+        screenFlashColor: nextEvent === 'surge' ? '255, 45, 106' : '0, 240, 255',
+      };
+    }
+  }
+
+  if (state.activeEvent && state.eventUntil && currentTime >= state.eventUntil) {
+    state = { ...state, activeEvent: undefined, eventUntil: undefined };
   }
 
   // Update particles in-place and release dead ones
@@ -820,6 +977,9 @@ export function updateGameState(
     multiplier,
     multiplierTimer,
     screenShake,
+    killStreak,
+    killStreakTimer,
+    nearMissCount,
     totalDamageDealt,
   };
 }
@@ -866,6 +1026,313 @@ function updatePlayer(
   };
 }
 
+function emitWeaponMuzzleEffect(
+  weaponType: WeaponType,
+  origin: Vector2,
+  shotAngle: number,
+  level: number
+): void {
+  switch (weaponType) {
+    case 'blaster': {
+      const sp = particlePool.acquire();
+      sp.id = generateId();
+      sp.position.x = origin.x + Math.cos(shotAngle) * 16;
+      sp.position.y = origin.y + Math.sin(shotAngle) * 16;
+      sp.velocity.x = Math.cos(shotAngle) * (5 + level * 0.6);
+      sp.velocity.y = Math.sin(shotAngle) * (5 + level * 0.6);
+      sp.color = COLORS.cyan;
+      sp.size = 3 + level * 0.2;
+      sp.life = 140;
+      sp.maxLife = 140;
+      sp.type = 'spark';
+      break;
+    }
+    case 'spread': {
+      for (let i = 0; i < 2; i++) {
+        const a = shotAngle + (Math.random() - 0.5) * 0.5;
+        const sp = particlePool.acquire();
+        sp.id = generateId();
+        sp.position.x = origin.x + Math.cos(a) * 14;
+        sp.position.y = origin.y + Math.sin(a) * 14;
+        sp.velocity.x = Math.cos(a) * (4 + Math.random() * 2);
+        sp.velocity.y = Math.sin(a) * (4 + Math.random() * 2);
+        sp.color = i % 2 === 0 ? COLORS.yellow : COLORS.orange;
+        sp.size = 2.5 + Math.random() * 1.5;
+        sp.life = 120 + Math.random() * 60;
+        sp.maxLife = 180;
+        sp.type = 'spark';
+      }
+      break;
+    }
+    case 'laser': {
+      for (let i = 0; i < 2; i++) {
+        const tl = particlePool.acquire();
+        tl.id = generateId();
+        tl.position.x = origin.x + Math.cos(shotAngle) * (10 + i * 8);
+        tl.position.y = origin.y + Math.sin(shotAngle) * (10 + i * 8);
+        tl.velocity.x = Math.cos(shotAngle) * (8 + i * 4);
+        tl.velocity.y = Math.sin(shotAngle) * (8 + i * 4);
+        tl.color = i === 0 ? COLORS.pink : COLORS.white;
+        tl.size = 8 + level * 0.5;
+        tl.life = 90 + i * 40;
+        tl.maxLife = 130 + i * 40;
+        tl.type = 'trail';
+      }
+      break;
+    }
+    case 'missile': {
+      const ring = particlePool.acquire();
+      ring.id = generateId();
+      ring.position.x = origin.x + Math.cos(shotAngle) * 12;
+      ring.position.y = origin.y + Math.sin(shotAngle) * 12;
+      ring.velocity.x = 0;
+      ring.velocity.y = 0;
+      ring.color = COLORS.orange;
+      ring.size = 20 + level * 2;
+      ring.life = 140;
+      ring.maxLife = 140;
+      ring.type = 'ring';
+      break;
+    }
+    default:
+      break;
+  }
+}
+
+function emitProjectileSignatureTrail(projectile: Projectile): void {
+  if (projectile.orbit || !projectile.weaponType) {
+    if (projectile.orbit && Math.random() < 0.25) {
+      const op = particlePool.acquire();
+      op.id = generateId();
+      op.position.x = projectile.position.x;
+      op.position.y = projectile.position.y;
+      op.velocity.x = (Math.random() - 0.5) * 1.2;
+      op.velocity.y = (Math.random() - 0.5) * 1.2;
+      op.color = COLORS.purple;
+      op.size = 2 + Math.random() * 2;
+      op.life = 120 + Math.random() * 80;
+      op.maxLife = 200;
+      op.type = 'spark';
+    }
+    return;
+  }
+
+  switch (projectile.weaponType) {
+    case 'blaster': {
+      if (Math.random() < 0.55) {
+        const tp = particlePool.acquire();
+        tp.id = generateId();
+        tp.position.x = projectile.position.x - projectile.velocity.x * 0.18;
+        tp.position.y = projectile.position.y - projectile.velocity.y * 0.18;
+        tp.velocity.x = -projectile.velocity.x * 0.03 + (Math.random() - 0.5) * 1.2;
+        tp.velocity.y = -projectile.velocity.y * 0.03 + (Math.random() - 0.5) * 1.2;
+        tp.color = COLORS.cyan;
+        tp.size = 2 + Math.random() * 1.5;
+        tp.life = 120 + Math.random() * 80;
+        tp.maxLife = 200;
+        tp.type = 'spark';
+      }
+      break;
+    }
+    case 'spread': {
+      if (Math.random() < 0.4) {
+        const tp = particlePool.acquire();
+        tp.id = generateId();
+        tp.position.x = projectile.position.x - projectile.velocity.x * 0.16;
+        tp.position.y = projectile.position.y - projectile.velocity.y * 0.16;
+        tp.velocity.x = -projectile.velocity.x * 0.02 + (Math.random() - 0.5) * 1.6;
+        tp.velocity.y = -projectile.velocity.y * 0.02 + (Math.random() - 0.5) * 1.6;
+        tp.color = Math.random() < 0.5 ? COLORS.yellow : COLORS.orange;
+        tp.size = 2 + Math.random() * 2;
+        tp.life = 110 + Math.random() * 80;
+        tp.maxLife = 190;
+        tp.type = 'spark';
+      }
+      break;
+    }
+    case 'laser': {
+      const tl = particlePool.acquire();
+      tl.id = generateId();
+      tl.position.x = projectile.position.x - projectile.velocity.x * 0.22;
+      tl.position.y = projectile.position.y - projectile.velocity.y * 0.22;
+      tl.velocity.x = -projectile.velocity.x * 0.05;
+      tl.velocity.y = -projectile.velocity.y * 0.05;
+      tl.color = COLORS.pink;
+      tl.size = 6;
+      tl.life = 90;
+      tl.maxLife = 90;
+      tl.type = 'trail';
+
+      if (Math.random() < 0.2) {
+        const ring = particlePool.acquire();
+        ring.id = generateId();
+        ring.position.x = projectile.position.x;
+        ring.position.y = projectile.position.y;
+        ring.velocity.x = 0;
+        ring.velocity.y = 0;
+        ring.color = COLORS.pink;
+        ring.size = 8;
+        ring.life = 70;
+        ring.maxLife = 70;
+        ring.type = 'ring';
+      }
+      break;
+    }
+    case 'missile': {
+      const tp = particlePool.acquire();
+      tp.id = generateId();
+      tp.position.x = projectile.position.x - projectile.velocity.x * 0.3 + (Math.random() - 0.5) * 4;
+      tp.position.y = projectile.position.y - projectile.velocity.y * 0.3 + (Math.random() - 0.5) * 4;
+      tp.velocity.x = -projectile.velocity.x * 0.05 + (Math.random() - 0.5) * 1.5;
+      tp.velocity.y = -projectile.velocity.y * 0.05 + (Math.random() - 0.5) * 1.5;
+      tp.color = COLORS.orange;
+      tp.size = 4 + Math.random() * 3;
+      tp.life = 200 + Math.random() * 100;
+      tp.maxLife = 300;
+      tp.type = 'explosion';
+
+      if (Math.random() < 0.5) {
+        const sp = particlePool.acquire();
+        sp.id = generateId();
+        sp.position.x = projectile.position.x - projectile.velocity.x * 0.5 + (Math.random() - 0.5) * 6;
+        sp.position.y = projectile.position.y - projectile.velocity.y * 0.5 + (Math.random() - 0.5) * 6;
+        sp.velocity.x = (Math.random() - 0.5) * 0.8;
+        sp.velocity.y = (Math.random() - 0.5) * 0.8 - 0.5;
+        sp.color = '#888888';
+        sp.size = 5 + Math.random() * 4;
+        sp.life = 300 + Math.random() * 200;
+        sp.maxLife = 500;
+        sp.type = 'spark';
+      }
+      break;
+    }
+    default:
+      break;
+  }
+}
+
+function emitWeaponImpactEffect(projectile: Projectile, enemy: Enemy): void {
+  const impactX = projectile.position.x;
+  const impactY = projectile.position.y;
+  const baseAngle = Math.atan2(projectile.velocity.y, projectile.velocity.x);
+
+  switch (projectile.weaponType) {
+    case 'blaster': {
+      for (let j = 0; j < 7; j++) {
+        const sparkAngle = baseAngle + (Math.random() - 0.5) * 1.2;
+        const sparkSpeed = 2 + Math.random() * 4;
+        const sp = particlePool.acquire();
+        sp.id = generateId();
+        sp.position.x = impactX;
+        sp.position.y = impactY;
+        sp.velocity.x = Math.cos(sparkAngle) * sparkSpeed;
+        sp.velocity.y = Math.sin(sparkAngle) * sparkSpeed;
+        sp.color = COLORS.cyan;
+        sp.size = 2 + Math.random() * 2;
+        sp.life = 160 + Math.random() * 100;
+        sp.maxLife = 260;
+        sp.type = 'spark';
+      }
+      break;
+    }
+    case 'spread': {
+      for (let j = 0; j < 9; j++) {
+        const shardAngle = baseAngle + (Math.random() - 0.5) * 1.8;
+        const shardSpeed = 3 + Math.random() * 5;
+        const sp = particlePool.acquire();
+        sp.id = generateId();
+        sp.position.x = impactX;
+        sp.position.y = impactY;
+        sp.velocity.x = Math.cos(shardAngle) * shardSpeed;
+        sp.velocity.y = Math.sin(shardAngle) * shardSpeed;
+        sp.color = j % 2 === 0 ? COLORS.yellow : COLORS.orange;
+        sp.size = 2.5 + Math.random() * 2;
+        sp.life = 140 + Math.random() * 120;
+        sp.maxLife = 260;
+        sp.type = 'spark';
+      }
+      break;
+    }
+    case 'laser': {
+      for (let j = 0; j < 3; j++) {
+        const tl = particlePool.acquire();
+        tl.id = generateId();
+        tl.position.x = impactX;
+        tl.position.y = impactY;
+        tl.velocity.x = Math.cos(baseAngle + (Math.random() - 0.5) * 0.3) * (6 + Math.random() * 4);
+        tl.velocity.y = Math.sin(baseAngle + (Math.random() - 0.5) * 0.3) * (6 + Math.random() * 4);
+        tl.color = j === 2 ? COLORS.white : COLORS.pink;
+        tl.size = 10;
+        tl.life = 120 + j * 20;
+        tl.maxLife = 120 + j * 20;
+        tl.type = 'trail';
+      }
+      break;
+    }
+    case 'orbit': {
+      for (let j = 0; j < 10; j++) {
+        const a = (j / 10) * Math.PI * 2 + Math.random() * 0.2;
+        const sp = particlePool.acquire();
+        sp.id = generateId();
+        sp.position.x = impactX;
+        sp.position.y = impactY;
+        sp.velocity.x = Math.cos(a) * (2 + Math.random() * 3.5);
+        sp.velocity.y = Math.sin(a) * (2 + Math.random() * 3.5);
+        sp.color = COLORS.purple;
+        sp.size = 2 + Math.random() * 2.5;
+        sp.life = 180 + Math.random() * 140;
+        sp.maxLife = 320;
+        sp.type = 'spark';
+      }
+      break;
+    }
+    default: {
+      for (let j = 0; j < 6; j++) {
+        const sparkAngle = Math.random() * Math.PI * 2;
+        const sparkSpeed = 2 + Math.random() * 4;
+        const sp = particlePool.acquire();
+        sp.id = generateId();
+        sp.position.x = impactX;
+        sp.position.y = impactY;
+        sp.velocity.x = Math.cos(sparkAngle) * sparkSpeed;
+        sp.velocity.y = Math.sin(sparkAngle) * sparkSpeed;
+        sp.color = projectile.color;
+        sp.size = 2 + Math.random() * 2;
+        sp.life = 160 + Math.random() * 120;
+        sp.maxLife = 280;
+        sp.type = 'spark';
+      }
+      break;
+    }
+  }
+
+  const ir = particlePool.acquire();
+  ir.id = generateId();
+  ir.position.x = impactX;
+  ir.position.y = impactY;
+  ir.velocity.x = 0;
+  ir.velocity.y = 0;
+  ir.color = projectile.color;
+  ir.size = projectile.weaponType === 'laser' ? 26 : projectile.weaponType === 'spread' ? 18 : 14;
+  ir.life = projectile.weaponType === 'laser' ? 130 : 170;
+  ir.maxLife = projectile.weaponType === 'laser' ? 130 : 170;
+  ir.type = 'ring';
+
+  if (projectile.weaponType !== 'missile') {
+    const sr = particlePool.acquire();
+    sr.id = generateId();
+    sr.position.x = impactX;
+    sr.position.y = impactY;
+    sr.velocity.x = 0;
+    sr.velocity.y = 0;
+    sr.color = enemy.color;
+    sr.size = 11;
+    sr.life = 120;
+    sr.maxLife = 120;
+    sr.type = 'ring';
+  }
+}
+
 function fireWeapons(player: Player, mousePos: Vector2, currentTime: number): void {
   const damageBuff = player.activeBuffs.find(b => b.type === 'damage');
   const damageMultiplier = damageBuff ? damageBuff.multiplier : 1;
@@ -877,8 +1344,8 @@ function fireWeapons(player: Player, mousePos: Vector2, currentTime: number): vo
     const config = WEAPON_CONFIGS[weapon.type];
 
     if (weapon.type === 'orbit') {
-      // Cap orbit count to prevent invincibility at high levels
-      const orbitCount = Math.min(6, weapon.projectileCount + weapon.level - 1);
+      // Keep orbit strong without forming a permanent full-coverage shield.
+      const orbitCount = Math.min(5, 2 + weapon.level);
       for (let i = 0; i < orbitCount; i++) {
         const orbitAngle = (i / orbitCount) * Math.PI * 2;
         const p = projectilePool.acquire();
@@ -887,18 +1354,33 @@ function fireWeapons(player: Player, mousePos: Vector2, currentTime: number): vo
         p.position.y = player.position.y;
         p.velocity.x = 0;
         p.velocity.y = 0;
-        p.radius = 8 + weapon.level;
+        p.radius = 7 + weapon.level * 0.6;
         p.color = config.color;
-        p.damage = weapon.damage * (1 + (weapon.level - 1) * 0.2) * damageMultiplier;
+        p.damage = weapon.damage * (1 + (weapon.level - 1) * 0.12) * damageMultiplier;
         p.isEnemy = false;
-        p.piercing = 999;
+        p.piercing = 4 + weapon.level;
         p.orbit = {
           angle: orbitAngle,
-          radius: 55 + weapon.level * 8,
-          speed: 0.04 + weapon.level * 0.008,
+          radius: 68 + weapon.level * 9,
+          speed: 0.032 + weapon.level * 0.005,
           owner: player.position,
         };
+        // Avoid multi-layer orbit stacking from repeated refires.
+        p.lifetime = Math.max(420, weapon.fireRate * 0.9);
         p.weaponType = 'orbit';
+      }
+      if (Math.random() < 0.4) {
+        const pulse = particlePool.acquire();
+        pulse.id = generateId();
+        pulse.position.x = player.position.x;
+        pulse.position.y = player.position.y;
+        pulse.velocity.x = 0;
+        pulse.velocity.y = 0;
+        pulse.color = COLORS.purple;
+        pulse.size = 26 + weapon.level * 2;
+        pulse.life = 180;
+        pulse.maxLife = 180;
+        pulse.type = 'ring';
       }
       return;
     }
@@ -929,6 +1411,7 @@ function fireWeapons(player: Player, mousePos: Vector2, currentTime: number): vo
       p.piercing = weapon.piercing;
       p.weaponType = weapon.type;
       p.explosionRadius = weapon.type === 'missile' ? 80 + weapon.level * 20 : undefined;
+      emitWeaponMuzzleEffect(weapon.type, player.position, projectileAngle, weapon.level);
     }
   });
 }
@@ -1015,27 +1498,12 @@ function checkProjectileCollisions(
         dp.type = 'text';
         dp.text = Math.floor(projectile.damage).toString();
 
-        // Hit spark particles
-        for (let j = 0; j < 10; j++) {
-          const sparkAngle = Math.random() * Math.PI * 2;
-          const sparkSpeed = 3 + Math.random() * 5;
-          const sp = particlePool.acquire();
-          sp.id = generateId();
-          sp.position.x = projectile.position.x + (Math.random() - 0.5) * 10;
-          sp.position.y = projectile.position.y + (Math.random() - 0.5) * 10;
-          sp.velocity.x = Math.cos(sparkAngle) * sparkSpeed;
-          sp.velocity.y = Math.sin(sparkAngle) * sparkSpeed;
-          sp.color = projectile.color;
-          sp.size = 2 + Math.random() * 3;
-          sp.life = 200 + Math.random() * 150;
-          sp.maxLife = 350;
-          sp.type = 'spark';
-        }
+        emitWeaponImpactEffect(projectile, enemy);
 
-        // Enemy color sparks
-        for (let j = 0; j < 6; j++) {
+        // Enemy body-chip sparks for readability, regardless of weapon.
+        for (let j = 0; j < 3; j++) {
           const sparkAngle = Math.random() * Math.PI * 2;
-          const sparkSpeed = 2 + Math.random() * 4;
+          const sparkSpeed = 2 + Math.random() * 3;
           const ep = particlePool.acquire();
           ep.id = generateId();
           ep.position.x = projectile.position.x;
@@ -1043,37 +1511,11 @@ function checkProjectileCollisions(
           ep.velocity.x = Math.cos(sparkAngle) * sparkSpeed;
           ep.velocity.y = Math.sin(sparkAngle) * sparkSpeed;
           ep.color = enemy.color;
-          ep.size = 3 + Math.random() * 2;
-          ep.life = 180 + Math.random() * 120;
-          ep.maxLife = 300;
+          ep.size = 2 + Math.random() * 2;
+          ep.life = 120 + Math.random() * 100;
+          ep.maxLife = 220;
           ep.type = 'explosion';
         }
-
-        // Impact ring
-        const ir = particlePool.acquire();
-        ir.id = generateId();
-        ir.position.x = projectile.position.x;
-        ir.position.y = projectile.position.y;
-        ir.velocity.x = 0;
-        ir.velocity.y = 0;
-        ir.color = projectile.color;
-        ir.size = 20;
-        ir.life = 180;
-        ir.maxLife = 180;
-        ir.type = 'ring';
-
-        // Secondary ring
-        const sr = particlePool.acquire();
-        sr.id = generateId();
-        sr.position.x = projectile.position.x;
-        sr.position.y = projectile.position.y;
-        sr.velocity.x = 0;
-        sr.velocity.y = 0;
-        sr.color = enemy.color;
-        sr.size = 12;
-        sr.life = 120;
-        sr.maxLife = 120;
-        sr.type = 'ring';
 
         // Missile explosion - dramatic multi-layer effect
         if (projectile.weaponType === 'missile' && projectile.explosionRadius) {
@@ -1081,17 +1523,17 @@ function checkProjectileCollisions(
           const explosionRadiusSq = explosionRadius * explosionRadius;
           missileShake += 18;
 
-          // Bright center flash
+          // Tinted center pulse
           const flash = particlePool.acquire();
           flash.id = generateId();
           flash.position.x = projectile.position.x;
           flash.position.y = projectile.position.y;
           flash.velocity.x = 0;
           flash.velocity.y = 0;
-          flash.color = COLORS.white;
-          flash.size = explosionRadius * 0.4;
-          flash.life = 120;
-          flash.maxLife = 120;
+          flash.color = COLORS.yellow;
+          flash.size = explosionRadius * 0.26;
+          flash.life = 90;
+          flash.maxLife = 90;
           flash.type = 'ring';
 
           // Inner fire burst (orange/yellow)
@@ -1244,7 +1686,14 @@ function checkProjectileCollisions(
   return { updatedEnemies, killedEnemies, damageDealt, missileShake };
 }
 
-function updateEnemy(enemy: Enemy, player: Player, deltaTime: number, currentTime: number, player2?: Player | null): Enemy {
+function updateEnemy(
+  enemy: Enemy,
+  player: Player,
+  deltaTime: number,
+  currentTime: number,
+  player2?: Player | null,
+  activeEvent?: WaveEventType
+): Enemy {
   let targetPlayer = player;
   if (player2 && player2.health > 0) {
     const dist1 = Math.hypot(player.position.x - enemy.position.x, player.position.y - enemy.position.y);
@@ -1284,6 +1733,11 @@ function updateEnemy(enemy: Enemy, player: Player, deltaTime: number, currentTim
   if (enemy.type === 'magnet') {
     vx *= 0.8;
     vy *= 0.8;
+  }
+
+  if (activeEvent === 'surge') {
+    vx *= 1.18;
+    vy *= 1.18;
   }
 
   return {
@@ -1329,6 +1783,13 @@ function spawnEnemy(wave: number, width: number, height: number, playerPos: Vect
 
   const config = ENEMY_CONFIGS[type];
   const waveMultiplier = 1 + wave * 0.1;
+  const eliteChance = isSplit ? 0 : Math.min(0.22, 0.06 + wave * 0.01);
+  const isElite = wave >= 3 && Math.random() < eliteChance;
+  let eliteModifier: Enemy['eliteModifier'] = undefined;
+  if (isElite) {
+    const mods: Array<NonNullable<Enemy['eliteModifier']>> = ['swift', 'volatile', 'shielded'];
+    eliteModifier = mods[Math.floor(Math.random() * mods.length)];
+  }
 
   let x: number, y: number;
   const side = Math.floor(Math.random() * 4);
@@ -1341,7 +1802,7 @@ function spawnEnemy(wave: number, width: number, height: number, playerPos: Vect
     default: x = Math.random() * width; y = height + marginDist; break;
   }
 
-  return {
+  let enemy: Enemy = {
     id: generateId(),
     position: { x, y },
     velocity: { x: 0, y: 0 },
@@ -1357,7 +1818,38 @@ function spawnEnemy(wave: number, width: number, height: number, playerPos: Vect
     zigzagPhase: type === 'zigzag' ? Math.random() * Math.PI * 2 : undefined,
     ghostAlpha: type === 'ghost' ? 1 : undefined,
     isSplit,
+    isElite,
+    eliteModifier,
   };
+
+  if (isElite && eliteModifier) {
+    enemy.points = Math.floor(enemy.points * 1.45);
+    enemy.color = eliteModifier === 'shielded'
+      ? COLORS.cyan
+      : eliteModifier === 'volatile'
+        ? COLORS.orange
+        : COLORS.green;
+
+    if (eliteModifier === 'swift') {
+      enemy.speed *= 1.5;
+      enemy.health *= 0.85;
+      enemy.maxHealth *= 0.85;
+      enemy.radius *= 0.95;
+    } else if (eliteModifier === 'volatile') {
+      enemy.speed *= 1.12;
+      enemy.health *= 0.92;
+      enemy.maxHealth *= 0.92;
+      enemy.radius *= 1.08;
+      enemy.damage *= 1.2;
+    } else if (eliteModifier === 'shielded') {
+      enemy.health *= 1.7;
+      enemy.maxHealth *= 1.7;
+      enemy.radius *= 1.15;
+      enemy.damage *= 1.1;
+    }
+  }
+
+  return enemy;
 }
 
 function spawnBoss(width: number, height: number, playerPos: Vector2): Enemy {
@@ -1556,11 +2048,12 @@ export function applyUpgrade(state: GameState, upgrade: Upgrade): GameState {
       ...player,
       weapons: player.weapons.map(w => {
         if (w.type === upgrade.weaponType) {
+          const isOrbit = w.type === 'orbit';
           return {
             ...w,
             level: w.level + 1,
-            damage: w.damage * 1.2,
-            fireRate: Math.max(50, w.fireRate * 0.9),
+            damage: w.damage * (isOrbit ? 1.12 : 1.2),
+            fireRate: Math.max(isOrbit ? 220 : 50, w.fireRate * (isOrbit ? 0.96 : 0.9)),
             projectileCount: w.type === 'spread' ? w.projectileCount + 1 : w.projectileCount,
             piercing: w.type === 'laser' ? w.piercing + 1 : w.piercing,
           };
@@ -1594,9 +2087,28 @@ export function applyUpgrade(state: GameState, upgrade: Upgrade): GameState {
   };
 }
 
+const POWERUP_DROP_WEIGHTS: Array<{ type: PowerUpType; weight: number }> = [
+  { type: 'health', weight: 0.24 },
+  { type: 'speed', weight: 0.2 },
+  { type: 'damage', weight: 0.2 },
+  { type: 'magnet', weight: 0.16 },
+  { type: 'xp', weight: 0.14 },
+  { type: 'bomb', weight: 0.06 },
+];
+
+function rollPowerUpType(): PowerUpType {
+  const totalWeight = POWERUP_DROP_WEIGHTS.reduce((sum, entry) => sum + entry.weight, 0);
+  const roll = Math.random() * totalWeight;
+  let acc = 0;
+  for (const entry of POWERUP_DROP_WEIGHTS) {
+    acc += entry.weight;
+    if (roll <= acc) return entry.type;
+  }
+  return 'health';
+}
+
 function createPowerup(position: Vector2): PowerUp {
-  const types: PowerUpType[] = ['health', 'speed', 'damage', 'magnet', 'xp', 'bomb'];
-  const type = types[Math.floor(Math.random() * types.length)];
+  const type = rollPowerUpType();
 
   return {
     id: generateId(),
@@ -1720,10 +2232,10 @@ function createExplosion(position: Vector2, color: string, count: number): void 
     p.position.y = position.y;
     p.velocity.x = Math.cos(angle) * speed;
     p.velocity.y = Math.sin(angle) * speed;
-    p.color = COLORS.white;
-    p.size = 2 + Math.random() * 2;
-    p.life = 300 + Math.random() * 200;
-    p.maxLife = 500;
+    p.color = Math.random() < 0.25 ? COLORS.white : color;
+    p.size = 1.5 + Math.random() * 1.5;
+    p.life = 220 + Math.random() * 140;
+    p.maxLife = 360;
     p.type = 'spark';
   }
 
@@ -1799,9 +2311,13 @@ export interface RenderState {
   score: number;
   wave: number;
   multiplier: number;
+  killStreak: number;
+  nearMissCount: number;
   screenShake: number;
   arena: ArenaType;
   waveAnnounceTime?: number;
+  activeEvent?: WaveEventType;
+  eventAnnounceTime?: number;
   screenFlash?: number;
   screenFlashColor?: string;
 }
@@ -1891,9 +2407,13 @@ export function serializeForRender(state: GameState): RenderState {
     score: state.score,
     wave: state.wave,
     multiplier: state.multiplier,
+    killStreak: state.killStreak,
+    nearMissCount: state.nearMissCount,
     screenShake: state.screenShake,
     arena: state.arena,
     waveAnnounceTime: state.waveAnnounceTime,
+    activeEvent: state.activeEvent,
+    eventAnnounceTime: state.eventAnnounceTime,
     screenFlash: state.screenFlash,
     screenFlashColor: state.screenFlashColor,
   };

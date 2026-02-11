@@ -13,6 +13,7 @@ interface ParticleSystemProps {
 
 export function ParticleSystem({ gameStateRef }: ParticleSystemProps) {
   const pointsRef = useRef<THREE.Points>(null);
+  const pointsMatRef = useRef<THREE.ShaderMaterial>(null);
   const trailRef = useRef<THREE.InstancedMesh>(null);
   const ringRef = useRef<THREE.InstancedMesh>(null);
 
@@ -25,16 +26,48 @@ export function ParticleSystem({ gameStateRef }: ParticleSystemProps) {
     geo.setAttribute('position', new THREE.Float32BufferAttribute(new Float32Array(MAX_PARTICLES * 3), 3));
     geo.setAttribute('color', new THREE.Float32BufferAttribute(new Float32Array(MAX_PARTICLES * 3), 3));
     geo.setAttribute('size', new THREE.Float32BufferAttribute(new Float32Array(MAX_PARTICLES), 1));
+    geo.setAttribute('alpha', new THREE.Float32BufferAttribute(new Float32Array(MAX_PARTICLES), 1));
     return geo;
   }, []);
 
-  const pointsMat = useMemo(() => new THREE.PointsMaterial({
-    size: 4,
-    vertexColors: true,
-    sizeAttenuation: false,
+  const pointsMat = useMemo(() => new THREE.ShaderMaterial({
+    uniforms: {
+      uPixelRatio: { value: Math.min(window.devicePixelRatio || 1, 2) },
+    },
+    vertexShader: `
+      attribute float size;
+      attribute float alpha;
+      varying vec3 vColor;
+      varying float vAlpha;
+
+      void main() {
+        vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+        gl_Position = projectionMatrix * mvPosition;
+        gl_PointSize = max(1.0, size * (1.6 + alpha * 1.5) * uPixelRatio);
+        vColor = color;
+        vAlpha = alpha;
+      }
+    `,
+    fragmentShader: `
+      varying vec3 vColor;
+      varying float vAlpha;
+
+      void main() {
+        vec2 uv = gl_PointCoord * 2.0 - 1.0;
+        float dist = dot(uv, uv);
+        if (dist > 1.0) discard;
+
+        float core = 1.0 - smoothstep(0.0, 0.45, dist);
+        float glow = 1.0 - smoothstep(0.2, 1.0, dist);
+        vec3 tint = mix(vColor, vec3(1.0), core * 0.6);
+        float alpha = (glow * 0.7 + core * 0.8) * vAlpha;
+        gl_FragColor = vec4(tint * alpha, alpha);
+      }
+    `,
     transparent: true,
-    blending: THREE.AdditiveBlending,
     depthWrite: false,
+    blending: THREE.AdditiveBlending,
+    vertexColors: true,
   }), []);
 
   // Trail: thin quads
@@ -63,6 +96,7 @@ export function ParticleSystem({ gameStateRef }: ParticleSystemProps) {
     const positions = pointsGeo.attributes.position as THREE.BufferAttribute;
     const colors = pointsGeo.attributes.color as THREE.BufferAttribute;
     const sizes = pointsGeo.attributes.size as THREE.BufferAttribute;
+    const alphas = pointsGeo.attributes.alpha as THREE.BufferAttribute;
 
     let sparkIdx = 0;
     let trailIdx = 0;
@@ -82,7 +116,7 @@ export function ParticleSystem({ gameStateRef }: ParticleSystemProps) {
           dummyObj.scale.set(ringRadius, ringRadius, 1);
           dummyObj.updateMatrix();
           ringRef.current.setMatrixAt(ringIdx, dummyObj.matrix);
-          tmpColor.set(p.color);
+          tmpColor.set(p.color).multiplyScalar(0.2 + alpha * 0.8);
           ringRef.current.setColorAt(ringIdx, tmpColor);
           ringIdx++;
         }
@@ -95,7 +129,7 @@ export function ParticleSystem({ gameStateRef }: ParticleSystemProps) {
           dummyObj.scale.set(len, p.size * alpha * 0.5, 1);
           dummyObj.updateMatrix();
           trailRef.current.setMatrixAt(trailIdx, dummyObj.matrix);
-          tmpColor.set(p.color);
+          tmpColor.set(p.color).multiplyScalar(0.2 + alpha * 0.8);
           trailRef.current.setColorAt(trailIdx, tmpColor);
           trailIdx++;
         }
@@ -103,8 +137,9 @@ export function ParticleSystem({ gameStateRef }: ParticleSystemProps) {
         // spark or explosion -> point particle
         positions.setXYZ(sparkIdx, p.position.x, -p.position.y, 3);
         tmpColor.set(p.color);
-        colors.setXYZ(sparkIdx, tmpColor.r * alpha, tmpColor.g * alpha, tmpColor.b * alpha);
-        sizes.setX(sparkIdx, Math.max(0.5, p.size * 0.5));
+        colors.setXYZ(sparkIdx, tmpColor.r, tmpColor.g, tmpColor.b);
+        sizes.setX(sparkIdx, Math.max(0.6, p.size * 0.5));
+        alphas.setX(sparkIdx, alpha);
         sparkIdx++;
       }
     }
@@ -114,6 +149,7 @@ export function ParticleSystem({ gameStateRef }: ParticleSystemProps) {
     positions.needsUpdate = true;
     colors.needsUpdate = true;
     sizes.needsUpdate = true;
+    alphas.needsUpdate = true;
 
     // Update trails
     if (trailRef.current) {
@@ -132,7 +168,9 @@ export function ParticleSystem({ gameStateRef }: ParticleSystemProps) {
 
   return (
     <>
-      <points ref={pointsRef} geometry={pointsGeo} material={pointsMat} frustumCulled={false} />
+      <points ref={pointsRef} geometry={pointsGeo} frustumCulled={false}>
+        <primitive ref={pointsMatRef} object={pointsMat} attach="material" />
+      </points>
       <instancedMesh ref={trailRef} args={[trailGeo, trailMat, MAX_PARTICLES]} frustumCulled={false}>
         <instancedBufferAttribute attach="instanceColor" args={[new Float32Array(MAX_PARTICLES * 3), 3]} />
       </instancedMesh>

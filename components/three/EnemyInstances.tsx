@@ -90,6 +90,7 @@ interface EnemyInstancesProps {
 
 export function EnemyInstances({ gameStateRef }: EnemyInstancesProps) {
   const meshRefs = useRef<Record<string, THREE.InstancedMesh | null>>({});
+  const telegraphRef = useRef<THREE.InstancedMesh>(null);
   // Health bar instances
   const healthBgRef = useRef<THREE.InstancedMesh>(null);
   const healthFillRef = useRef<THREE.InstancedMesh>(null);
@@ -123,10 +124,19 @@ export function EnemyInstances({ gameStateRef }: EnemyInstancesProps) {
   }), []);
 
   const healthBarGeo = useMemo(() => new THREE.PlaneGeometry(1, 4), []);
+  const telegraphGeo = useMemo(() => new THREE.RingGeometry(0.8, 1, 32), []);
+  const telegraphMat = useMemo(() => new THREE.MeshBasicMaterial({
+    transparent: true,
+    opacity: 0.38,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+  }), []);
 
   useFrame(({ clock }) => {
     const state = gameStateRef.current;
     if (!state) return;
+    const now = Date.now();
 
     // Bucket enemies by shape
     const buckets: Record<string, typeof state.enemies> = {};
@@ -140,6 +150,7 @@ export function EnemyInstances({ gameStateRef }: EnemyInstancesProps) {
     }
 
     let totalEnemyIdx = 0;
+    let telegraphIdx = 0;
 
     for (const shape of SHAPE_TYPES) {
       const mesh = meshRefs.current[shape];
@@ -166,6 +177,24 @@ export function EnemyInstances({ gameStateRef }: EnemyInstancesProps) {
 
         tmpColor.set(enemy.color);
         mesh.setColorAt(i, tmpColor);
+
+        // Spawn/charge telegraphs for dangerous enemies and elites.
+        const age = now - enemy.spawnTime;
+        const isDangerType = enemy.type === 'shooter' || enemy.type === 'bomber' || enemy.type === 'boss';
+        const spawnTelegraph = age < 900 && (isDangerType || enemy.isElite);
+        const periodicTelegraph = isDangerType && (age % 1800) < 180;
+        if (telegraphRef.current && (spawnTelegraph || periodicTelegraph)) {
+          const normalized = spawnTelegraph ? (1 - age / 900) : (1 - ((age % 1800) / 180));
+          const scale = (r * 1.35) + normalized * (r * 1.8);
+          dummyObj.position.set(enemy.position.x, -enemy.position.y, 3.9);
+          dummyObj.rotation.set(0, 0, clock.elapsedTime * 0.45);
+          dummyObj.scale.set(scale, scale, 1);
+          dummyObj.updateMatrix();
+          telegraphRef.current.setMatrixAt(telegraphIdx, dummyObj.matrix);
+          tmpColor.set(enemy.color).multiplyScalar(0.6 + normalized * 0.6);
+          telegraphRef.current.setColorAt(telegraphIdx, tmpColor);
+          telegraphIdx++;
+        }
 
         // Health bars
         if (healthBgRef.current && healthFillRef.current) {
@@ -211,6 +240,11 @@ export function EnemyInstances({ gameStateRef }: EnemyInstancesProps) {
       healthFillRef.current.instanceMatrix.needsUpdate = true;
       if (healthFillRef.current.instanceColor) healthFillRef.current.instanceColor.needsUpdate = true;
     }
+    if (telegraphRef.current) {
+      telegraphRef.current.count = telegraphIdx;
+      telegraphRef.current.instanceMatrix.needsUpdate = true;
+      if (telegraphRef.current.instanceColor) telegraphRef.current.instanceColor.needsUpdate = true;
+    }
   });
 
   return (
@@ -229,6 +263,10 @@ export function EnemyInstances({ gameStateRef }: EnemyInstancesProps) {
       <instancedMesh ref={healthBgRef} args={[healthBarGeo, healthBgMaterial, MAX_ENEMIES]} frustumCulled={false} />
       {/* Health bar fill */}
       <instancedMesh ref={healthFillRef} args={[healthBarGeo, healthFillMaterial, MAX_ENEMIES]} frustumCulled={false}>
+        <instancedBufferAttribute attach="instanceColor" args={[new Float32Array(MAX_ENEMIES * 3), 3]} />
+      </instancedMesh>
+      {/* Enemy telegraph rings */}
+      <instancedMesh ref={telegraphRef} args={[telegraphGeo, telegraphMat, MAX_ENEMIES]} frustumCulled={false}>
         <instancedBufferAttribute attach="instanceColor" args={[new Float32Array(MAX_ENEMIES * 3), 3]} />
       </instancedMesh>
     </>

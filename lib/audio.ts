@@ -259,3 +259,95 @@ export function playWaveComplete() {
     osc.stop(startTime + 0.15);
   });
 }
+
+function blip(type: OscillatorType, from: number, to: number, gainStart: number, duration: number) {
+  const ctx = getAudioContext();
+  if (!ctx || !masterGain || muted) return;
+  const osc = ctx.createOscillator();
+  const gain = ctx.createGain();
+  osc.type = type;
+  osc.frequency.setValueAtTime(from, ctx.currentTime);
+  osc.frequency.exponentialRampToValueAtTime(Math.max(20, to), ctx.currentTime + duration);
+  gain.gain.setValueAtTime(gainStart, ctx.currentTime);
+  gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + duration);
+  osc.connect(gain);
+  gain.connect(masterGain);
+  osc.start(ctx.currentTime);
+  osc.stop(ctx.currentTime + duration);
+}
+
+export function playWeaponFire(weaponType: string) {
+  switch (weaponType) {
+    case 'blaster':
+      blip('square', 940, 510, 0.12, 0.045);
+      break;
+    case 'spread':
+      blip('triangle', 620, 280, 0.12, 0.06);
+      break;
+    case 'laser':
+      blip('sawtooth', 1300, 650, 0.08, 0.03);
+      break;
+    case 'orbit':
+      blip('sine', 360, 420, 0.06, 0.07);
+      break;
+    case 'missile':
+      blip('sawtooth', 260, 120, 0.16, 0.11);
+      break;
+    default:
+      playShoot();
+  }
+}
+
+export function playWeaponImpact(weaponType: string) {
+  switch (weaponType) {
+    case 'blaster':
+      blip('square', 420, 180, 0.11, 0.05);
+      break;
+    case 'spread':
+      blip('triangle', 280, 120, 0.12, 0.07);
+      break;
+    case 'laser':
+      blip('sawtooth', 900, 240, 0.1, 0.045);
+      break;
+    case 'orbit':
+      blip('sine', 500, 220, 0.1, 0.06);
+      break;
+    case 'missile':
+      playExplosion();
+      break;
+    default:
+      playHit();
+  }
+}
+
+export function playStreak(streak: number) {
+  const ctx = getAudioContext();
+  if (!ctx || !masterGain || muted) return;
+  const master = masterGain;
+  const base = streak >= 10 ? 622 : 523;
+  [base, base * 1.25, base * 1.5].forEach((freq, i) => {
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    const start = ctx.currentTime + i * 0.05;
+    osc.type = 'square';
+    osc.frequency.value = freq;
+    gain.gain.setValueAtTime(0.12, start);
+    gain.gain.exponentialRampToValueAtTime(0.01, start + 0.14);
+    osc.connect(gain);
+    gain.connect(master);
+    osc.start(start);
+    osc.stop(start + 0.14);
+  });
+}
+
+export function playNearMiss() {
+  blip('sine', 260, 760, 0.09, 0.08);
+}
+
+export function playEventStart(eventType: string) {
+  if (eventType === 'surge') {
+    blip('sawtooth', 320, 120, 0.2, 0.16);
+  } else {
+    blip('sine', 220, 520, 0.16, 0.2);
+  }
+}

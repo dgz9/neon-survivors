@@ -100,7 +100,7 @@ export default function GameOver({
         <div className="w-full max-w-lg py-8">
         {/* Game Over Header */}
         <div className="text-center mb-8">
-          <div className="font-display text-6xl sm:text-8xl text-electric-pink mb-2 glitch-text" data-text="GAME OVER">
+          <div className="font-menu text-6xl sm:text-8xl text-electric-pink mb-2 glitch-text" data-text="GAME OVER">
             GAME OVER
           </div>
           <div className="h-[2px] bg-gradient-to-r from-transparent via-electric-pink to-transparent" />
@@ -109,15 +109,15 @@ export default function GameOver({
         {/* Stats */}
         <div className="grid grid-cols-3 gap-4 mb-8">
           <div className="text-center p-4 border border-white/10 bg-brutal-dark">
-            <div className="font-display text-3xl text-electric-cyan">{Math.floor(score).toLocaleString()}</div>
+            <div className="font-menu text-3xl text-electric-cyan">{Math.floor(score).toLocaleString()}</div>
             <div className="font-mono text-xs text-white/40 uppercase tracking-wider mt-1">Score</div>
           </div>
           <div className="text-center p-4 border border-white/10 bg-brutal-dark">
-            <div className="font-display text-3xl text-electric-yellow">{wave}</div>
+            <div className="font-menu text-3xl text-electric-yellow">{wave}</div>
             <div className="font-mono text-xs text-white/40 uppercase tracking-wider mt-1">Wave</div>
           </div>
           <div className="text-center p-4 border border-white/10 bg-brutal-dark">
-            <div className="font-display text-3xl text-electric-pink">{kills}</div>
+            <div className="font-menu text-3xl text-electric-pink">{kills}</div>
             <div className="font-mono text-xs text-white/40 uppercase tracking-wider mt-1">Kills</div>
           </div>
         </div>
@@ -126,7 +126,7 @@ export default function GameOver({
         {playerRank && (
           <div className="text-center mb-6">
             <span className="font-mono text-sm text-white/60">Your rank: </span>
-            <span className="font-display text-2xl text-electric-yellow">#{playerRank}</span>
+            <span className="font-menu text-2xl text-electric-yellow">#{playerRank}</span>
           </div>
         )}
 
@@ -198,7 +198,7 @@ export default function GameOver({
         {/* Leaderboard */}
         <div className="mb-8">
           <div className="flex items-center gap-3 mb-4">
-            <span className="text-electric-cyan font-display text-xl">⚡</span>
+            <span className="text-electric-cyan font-menu text-xl">⚡</span>
             <span className="font-mono text-xs text-white/40 uppercase tracking-wider">Top Survivors</span>
             <div className="h-[1px] flex-1 bg-white/10" />
           </div>
@@ -218,7 +218,7 @@ export default function GameOver({
                       : ''
                   }`}
                 >
-                  <span className={`font-display text-lg w-8 ${
+                  <span className={`font-menu text-lg w-8 ${
                     index === 0 ? 'text-electric-yellow' :
                     index === 1 ? 'text-white/60' :
                     index === 2 ? 'text-electric-orange' :
@@ -232,7 +232,7 @@ export default function GameOver({
                   <span className="font-mono text-xs text-white/40">
                     W{entry.wave}
                   </span>
-                  <span className="font-display text-lg text-electric-cyan w-24 text-right">
+                  <span className="font-menu text-lg text-electric-cyan w-24 text-right">
                     {entry.score.toLocaleString()}
                   </span>
                 </div>
@@ -245,13 +245,13 @@ export default function GameOver({
         <div className="flex gap-4">
           <button
             onClick={onPlayAgain}
-            className="flex-1 btn-brutal py-4 font-display text-lg"
+            className="flex-1 btn-brutal py-4 font-menu text-lg"
           >
             Play Again
           </button>
           <button
             onClick={onBackToMenu}
-            className="flex-1 btn-brutal-outline py-4 font-display text-lg"
+            className="flex-1 btn-brutal-outline py-4 font-menu text-lg"
           >
             Menu
           </button>

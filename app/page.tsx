@@ -133,7 +133,7 @@ export default function Home() {
           {/* Game Mode Selection */}
           <div className="w-full max-w-2xl mb-6">
             <div className="flex items-center gap-3 mb-4">
-              <span className="text-electric-green font-display text-2xl">⚔</span>
+              <span className="text-electric-green font-menu text-2xl">⚔</span>
               <div className="h-[1px] flex-1 bg-white/10" />
               <span className="font-mono text-xs text-white/40 uppercase tracking-wider">Game Mode</span>
             </div>
@@ -149,7 +149,7 @@ export default function Home() {
               >
                 <User className={`w-6 h-6 ${gameMode === 'solo' ? 'text-electric-cyan' : 'text-white/60'}`} />
                 <div className="text-left">
-                  <div className={`font-display text-lg ${gameMode === 'solo' ? 'text-electric-cyan' : 'text-white/80'}`}>
+                  <div className={`font-menu text-lg ${gameMode === 'solo' ? 'text-electric-cyan' : 'text-white/80'}`}>
                     SOLO
                   </div>
                   <div className="font-mono text-[10px] text-white/40">Classic survival</div>
@@ -166,7 +166,7 @@ export default function Home() {
               >
                 <Users className={`w-6 h-6 ${gameMode === 'coop' ? 'text-electric-pink' : 'text-white/60'}`} />
                 <div className="text-left">
-                  <div className={`font-display text-lg ${gameMode === 'coop' ? 'text-electric-pink' : 'text-white/80'}`}>
+                  <div className={`font-menu text-lg ${gameMode === 'coop' ? 'text-electric-pink' : 'text-white/80'}`}>
                     CO-OP
                   </div>
                   <div className="font-mono text-[10px] text-white/40">Team up with a friend</div>
@@ -184,7 +184,7 @@ export default function Home() {
           {/* Arena Selection */}
           <div className="w-full max-w-2xl mt-6">
             <div className="flex items-center gap-3 mb-4">
-              <span className="text-electric-pink font-display text-2xl">◆</span>
+              <span className="text-electric-pink font-menu text-2xl">◆</span>
               <div className="h-[1px] flex-1 bg-white/10" />
               <span className="font-mono text-xs text-white/40 uppercase tracking-wider">Select Arena</span>
             </div>
@@ -228,7 +228,7 @@ export default function Home() {
           {/* How to play */}
           <div className="w-full max-w-2xl mt-8 mb-6">
             <div className="flex items-center gap-3 mb-4">
-              <span className="text-electric-cyan font-display text-2xl">?</span>
+              <span className="text-electric-cyan font-menu text-2xl">?</span>
               <div className="h-[1px] flex-1 bg-white/10" />
               <span className="font-mono text-xs text-white/40 uppercase tracking-wider">How To Play</span>
             </div>
@@ -260,7 +260,7 @@ export default function Home() {
           {/* Powerups Reference */}
           <div className="w-full max-w-2xl mt-6 mb-6">
             <div className="flex items-center gap-3 mb-4">
-              <span className="text-electric-green font-display text-2xl">★</span>
+              <span className="text-electric-green font-menu text-2xl">★</span>
               <div className="h-[1px] flex-1 bg-white/10" />
               <span className="font-mono text-xs text-white/40 uppercase tracking-wider">Powerups</span>
             </div>

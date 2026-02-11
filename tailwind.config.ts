@@ -21,6 +21,7 @@ const config: Config = {
       },
       fontFamily: {
         display: ['var(--font-display)', 'Orbitron', 'sans-serif'],
+        menu: ['var(--font-menu)', 'Audiowide', 'Orbitron', 'sans-serif'],
         mono: ['var(--font-mono)', 'JetBrains Mono', 'monospace'],
       },
       animation: {

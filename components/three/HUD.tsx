@@ -10,6 +10,9 @@ interface HUDProps {
     experience: number;
     experienceToLevel: number;
     multiplier: number;
+    killStreak: number;
+    activeEvent?: string;
+    eventAnnounceTime?: number;
     weapons: { type: string; level: number }[];
     waveAnnounceTime?: number;
     gameTime: number;
@@ -36,6 +39,9 @@ export function HUD({ displayState }: HUDProps) {
     experience,
     experienceToLevel,
     multiplier,
+    killStreak,
+    activeEvent,
+    eventAnnounceTime,
     weapons,
     waveAnnounceTime,
     gameTime,
@@ -50,6 +56,10 @@ export function HUD({ displayState }: HUDProps) {
     waveAnnounceTime !== undefined && now - waveAnnounceTime < 3000;
   const waveAnnounceFade = showWaveAnnounce
     ? Math.max(0, 1 - (now - waveAnnounceTime!) / 3000)
+    : 0;
+  const showEventAnnounce = eventAnnounceTime !== undefined && now - eventAnnounceTime < 2200;
+  const eventAnnounceFade = showEventAnnounce
+    ? Math.max(0, 1 - (now - eventAnnounceTime!) / 2200)
     : 0;
 
   return (
@@ -73,6 +83,19 @@ export function HUD({ displayState }: HUDProps) {
             }}
           >
             x{multiplier.toFixed(1)}
+          </div>
+        )}
+        {killStreak >= 3 && (
+          <div
+            className="inline-block mt-1 px-2 py-0.5 rounded text-xs font-bold"
+            style={{
+              background: 'rgba(255,45,106,0.15)',
+              border: '1px solid rgba(255,45,106,0.6)',
+              color: '#ff2d6a',
+              textShadow: '0 0 6px rgba(255,45,106,0.6)',
+            }}
+          >
+            {killStreak} streak
           </div>
         )}
       </div>
@@ -154,6 +177,25 @@ export function HUD({ displayState }: HUDProps) {
             }}
           >
             WAVE {wave}
+          </div>
+        </div>
+      )}
+
+      {showEventAnnounce && activeEvent && (
+        <div
+          className="absolute inset-0 flex items-start justify-center pt-24"
+          style={{ opacity: eventAnnounceFade }}
+        >
+          <div
+            className="text-2xl font-bold tracking-[0.2em]"
+            style={{
+              color: activeEvent === 'surge' ? '#ff2d6a' : '#00f0ff',
+              textShadow: activeEvent === 'surge'
+                ? '0 0 14px rgba(255,45,106,0.7)'
+                : '0 0 14px rgba(0,240,255,0.7)',
+            }}
+          >
+            {activeEvent === 'surge' ? 'SURGE MODE' : 'MAGNET STORM'}
           </div>
         </div>
       )}

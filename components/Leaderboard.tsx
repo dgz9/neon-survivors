@@ -51,7 +51,7 @@ export default function Leaderboard({ isOpen, onClose }: LeaderboardProps) {
         <div className="flex items-center justify-between p-4 border-b border-white/10">
           <div className="flex items-center gap-3">
             <Trophy className="w-6 h-6 text-electric-yellow" />
-            <h2 className="font-display text-2xl text-electric-yellow">LEADERBOARD</h2>
+            <h2 className="font-menu text-2xl text-electric-yellow">LEADERBOARD</h2>
           </div>
           <div className="flex items-center gap-2">
             <button
@@ -101,7 +101,7 @@ export default function Leaderboard({ isOpen, onClose }: LeaderboardProps) {
                     }`}
                   >
                     <td className="p-3">
-                      <span className={`font-display text-lg ${
+                      <span className={`font-menu text-lg ${
                         index === 0 ? 'text-electric-yellow' :
                         index === 1 ? 'text-white/60' :
                         index === 2 ? 'text-electric-orange' :
@@ -119,7 +119,7 @@ export default function Leaderboard({ isOpen, onClose }: LeaderboardProps) {
                     <td className="p-3 text-center font-mono text-sm text-white/60">
                       {entry.kills}
                     </td>
-                    <td className="p-3 text-right font-display text-lg text-electric-cyan">
+                    <td className="p-3 text-right font-menu text-lg text-electric-cyan">
                       {entry.score.toLocaleString()}
                     </td>
                   </tr>

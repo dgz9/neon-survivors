@@ -51,6 +51,8 @@ export interface Enemy {
   zigzagPhase?: number;
   ghostAlpha?: number;
   isSplit?: boolean;
+  isElite?: boolean;
+  eliteModifier?: 'swift' | 'volatile' | 'shielded';
 }
 
 export type EnemyType = 'chaser' | 'shooter' | 'tank' | 'swarm' | 'bomber' | 'boss' | 'zigzag' | 'splitter' | 'ghost' | 'magnet';
@@ -164,6 +166,13 @@ export interface GameState {
   screenFlashColor?: string;
   slowMoUntil?: number;
   slowMoFactor?: number;
+  killStreak: number;
+  killStreakTimer: number;
+  lastNearMissTime?: number;
+  nearMissCount: number;
+  activeEvent?: WaveEventType;
+  eventUntil?: number;
+  eventAnnounceTime?: number;
   // Stats tracking
   totalDamageDealt: number;
   totalDamageTaken: number;
@@ -174,6 +183,7 @@ export interface GameState {
 }
 
 export type ArenaType = 'void' | 'grid' | 'cyber' | 'neon';
+export type WaveEventType = 'surge' | 'magnet_storm';
 
 export interface Achievement {
   id: string;
@@ -206,7 +216,7 @@ export const DEFAULT_CONFIG: GameConfig = {
   baseEnemyHealth: 30,
   baseEnemyDamage: 10,
   experienceToLevel: 100,
-  powerupSpawnChance: 0.15,
+  powerupSpawnChance: 0.13,
   magnetRange: 100,
 };
 

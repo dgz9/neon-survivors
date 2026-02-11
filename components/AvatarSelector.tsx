@@ -85,7 +85,7 @@ export default function AvatarSelector({ onSelect, buttonText = '// START GAME' 
       {/* Name input */}
       <div>
         <div className="flex items-center gap-3 mb-4">
-          <span className="text-electric-yellow font-display text-2xl">01</span>
+          <span className="text-electric-yellow font-menu text-2xl">01</span>
           <div className="h-[1px] flex-1 bg-white/10" />
           <span className="font-mono text-xs text-white/40 uppercase tracking-wider">Enter Your Name</span>
         </div>
@@ -103,7 +103,7 @@ export default function AvatarSelector({ onSelect, buttonText = '// START GAME' 
       {/* Avatar selection */}
       <div>
         <div className="flex items-center gap-3 mb-4">
-          <span className="text-electric-pink font-display text-2xl">02</span>
+          <span className="text-electric-pink font-menu text-2xl">02</span>
           <div className="h-[1px] flex-1 bg-white/10" />
           <span className="font-mono text-xs text-white/40 uppercase tracking-wider">Choose Avatar</span>
         </div>
@@ -154,7 +154,7 @@ export default function AvatarSelector({ onSelect, buttonText = '// START GAME' 
         <button
           onClick={handleStart}
           disabled={!isReady}
-          className={`w-full py-4 font-display text-2xl uppercase tracking-wider transition-all ${
+          className={`w-full py-4 font-menu text-2xl uppercase tracking-wider transition-all ${
             isReady
               ? 'bg-electric-cyan text-brutal-black hover:bg-white'
               : 'bg-white/10 text-white/30 cursor-not-allowed'
