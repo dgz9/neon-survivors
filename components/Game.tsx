@@ -63,6 +63,8 @@ export default function Game({ playerImageUrl, playerName, arena = 'grid', onGam
   const [isLoading, setIsLoading] = useState(true);
   const [isPaused, setIsPaused] = useState(false);
   const [dimensions, setDimensions] = useState({ width: 800, height: 600 });
+  const dimensionsRef = useRef(dimensions);
+  const gameInitializedRef = useRef(false);
   const [displayState, setDisplayState] = useState<{
     score: number;
     wave: number;
@@ -104,10 +106,12 @@ export default function Game({ playerImageUrl, playerName, arena = 'grid', onGam
     const handleResize = () => {
       if (gameAreaRef.current) {
         const rect = gameAreaRef.current.getBoundingClientRect();
-        setDimensions({
+        const newDims = {
           width: Math.floor(rect.width),
           height: Math.floor(rect.height),
-        });
+        };
+        dimensionsRef.current = newDims;
+        setDimensions(newDims);
       }
     };
 
@@ -116,11 +120,12 @@ export default function Game({ playerImageUrl, playerName, arena = 'grid', onGam
     return () => window.removeEventListener('resize', handleResize);
   }, []);
 
-  // Initialize game
+  // Initialize game (only once)
   const initGame = useCallback(async () => {
     setIsLoading(true);
 
-    let state = createInitialGameState(playerImageUrl, dimensions.width, dimensions.height, DEFAULT_CONFIG);
+    const dims = dimensionsRef.current;
+    let state = createInitialGameState(playerImageUrl, dims.width, dims.height, DEFAULT_CONFIG);
     state = { ...state, arena };
     state = await loadPlayerImage(state);
     state = startGame(state);
@@ -128,13 +133,14 @@ export default function Game({ playerImageUrl, playerName, arena = 'grid', onGam
     setPlayerImage(state.player.image);
     gameStateRef.current = state;
     setIsLoading(false);
-  }, [playerImageUrl, dimensions, arena]);
+  }, [playerImageUrl, arena]);
 
   useEffect(() => {
-    if (dimensions.width > 0 && dimensions.height > 0) {
+    if (dimensionsRef.current.width > 0 && dimensionsRef.current.height > 0 && !gameInitializedRef.current) {
+      gameInitializedRef.current = true;
       initGame();
     }
-  }, [initGame, dimensions.width, dimensions.height]);
+  }, [initGame, dimensions]);
 
   useEffect(() => {
     setSoundEnabled(!isMuted());
@@ -282,11 +288,12 @@ export default function Game({ playerImageUrl, playerName, arena = 'grid', onGam
       }
 
       if (!isPaused && !showUpgrades && gameStateRef.current.isRunning) {
+        const dims = dimensionsRef.current;
         gameStateRef.current = updateGameState(
           gameStateRef.current,
           deltaTime,
-          dimensions.width,
-          dimensions.height,
+          dims.width,
+          dims.height,
           inputRef.current,
           DEFAULT_CONFIG
         );
@@ -417,7 +424,7 @@ export default function Game({ playerImageUrl, playerName, arena = 'grid', onGam
     return () => {
       cancelAnimationFrame(animationFrameRef.current);
     };
-  }, [isLoading, isPaused, showUpgrades, dimensions, onGameOver]);
+  }, [isLoading, isPaused, showUpgrades, onGameOver]);
 
   return (
     <div className="fixed inset-0 bg-brutal-black flex flex-col">

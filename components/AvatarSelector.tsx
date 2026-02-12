@@ -56,20 +56,20 @@ export default function AvatarSelector({ onSelect, buttonText = '// START GAME' 
     if (customImage) {
       imageUrl = customImage;
     } else if (selectedAvatar) {
-      // Create canvas with emoji for avatar
+      // Create canvas with emoji for avatar (high-res for crisp rendering)
       const canvas = document.createElement('canvas');
-      canvas.width = 128;
-      canvas.height = 128;
+      canvas.width = 256;
+      canvas.height = 256;
       const ctx = canvas.getContext('2d');
       if (ctx) {
         const avatar = PRESET_AVATARS.find(a => a.id === selectedAvatar);
         if (avatar) {
           ctx.fillStyle = '#0a0a0a';
-          ctx.fillRect(0, 0, 128, 128);
-          ctx.font = '80px sans-serif';
+          ctx.fillRect(0, 0, 256, 256);
+          ctx.font = '160px sans-serif';
           ctx.textAlign = 'center';
           ctx.textBaseline = 'middle';
-          ctx.fillText(avatar.emoji, 64, 64);
+          ctx.fillText(avatar.emoji, 128, 128);
         }
         imageUrl = canvas.toDataURL();
       }
