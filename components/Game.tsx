@@ -10,6 +10,13 @@ import {
   updateGameState,
   applyUpgrade,
 } from '@/lib/gameEngine';
+import { FIXED_DT, createAccumulator, advanceAccumulator, AccumulatorState } from '@/lib/engine/timestep';
+import {
+  loadMetaProgression,
+  saveMetaProgression,
+  calculateRunReward,
+  applyMetaToInitialState,
+} from '@/lib/engine/metaProgression';
 import {
   playHit,
   playExplosion,
@@ -54,6 +61,7 @@ export default function Game({ playerImageUrl, playerName, arena = 'grid', onGam
   const gameStateRef = useRef<GameState | null>(null);
   const animationFrameRef = useRef<number>(0);
   const lastTimeRef = useRef<number>(0);
+  const accRef = useRef<AccumulatorState | null>(null);
   const inputRef = useRef<{ keys: Set<string>; mousePos: Vector2; mouseDown: boolean }>({
     keys: new Set(),
     mousePos: { x: 0, y: 0 },
@@ -127,6 +135,8 @@ export default function Game({ playerImageUrl, playerName, arena = 'grid', onGam
     const dims = dimensionsRef.current;
     let state = createInitialGameState(playerImageUrl, dims.width, dims.height, DEFAULT_CONFIG);
     state = { ...state, arena };
+    const meta = loadMetaProgression();
+    state = applyMetaToInitialState(state, meta);
     state = await loadPlayerImage(state);
     state = startGame(state);
 
@@ -247,8 +257,10 @@ export default function Game({ playerImageUrl, playerName, arena = 'grid', onGam
         return;
       }
 
-      const deltaTime = Math.min((timestamp - lastTimeRef.current) / 16.67, 3);
-      lastTimeRef.current = timestamp;
+      // Initialize accumulator on first frame
+      if (!accRef.current) {
+        accRef.current = createAccumulator(timestamp);
+      }
 
       // Poll gamepad input
       if (gamepadIndexRef.current !== null) {
@@ -288,15 +300,26 @@ export default function Game({ playerImageUrl, playerName, arena = 'grid', onGam
       }
 
       if (!isPaused && !showUpgrades && gameStateRef.current.isRunning) {
+        // Compute slow-mo factor from game state
+        const curState = gameStateRef.current;
+        const slowMoFactor = (curState.slowMoUntil && Date.now() < curState.slowMoUntil)
+          ? (curState.slowMoFactor || 0.3) : 1;
+
+        const { acc, tickCount } = advanceAccumulator(accRef.current, timestamp, slowMoFactor);
+        accRef.current = acc;
+
         const dims = dimensionsRef.current;
-        gameStateRef.current = updateGameState(
-          gameStateRef.current,
-          deltaTime,
-          dims.width,
-          dims.height,
-          inputRef.current,
-          DEFAULT_CONFIG
-        );
+        for (let i = 0; i < tickCount; i++) {
+          gameStateRef.current = updateGameState(
+            gameStateRef.current,
+            FIXED_DT,
+            dims.width,
+            dims.height,
+            inputRef.current,
+            DEFAULT_CONFIG
+          );
+          if (gameStateRef.current.isGameOver) break;
+        }
 
         // Update display state periodically (~6x/sec)
         if (Math.floor(timestamp) % 100 < 17) {
@@ -399,6 +422,15 @@ export default function Game({ playerImageUrl, playerName, arena = 'grid', onGam
         };
         const newAchievements = checkAchievements(achStats);
 
+        // Award crystals and save meta-progression
+        const crystals = calculateRunReward(gs.score, gs.wave, gs.bossesKilledThisRun || 0);
+        const meta = loadMetaProgression();
+        saveMetaProgression({
+          ...meta,
+          crystals: meta.crystals + crystals,
+          totalCrystalsEarned: meta.totalCrystalsEarned + crystals,
+        });
+
         onGameOver(
           gs.score,
           gs.wave,
@@ -418,7 +450,7 @@ export default function Game({ playerImageUrl, playerName, arena = 'grid', onGam
       animationFrameRef.current = requestAnimationFrame(gameLoop);
     };
 
-    lastTimeRef.current = performance.now();
+    accRef.current = null; // will be initialized on first frame
     animationFrameRef.current = requestAnimationFrame(gameLoop);
 
     return () => {

@@ -16,6 +16,7 @@ import {
   releaseXPOrb,
   getXPOrbCount,
 } from '@/lib/gameEngine';
+import { FIXED_DT, createAccumulator, advanceAccumulator, AccumulatorState } from '@/lib/engine/timestep';
 import { Upgrade } from '@/types/game';
 import { sendInput, sendGameState, decodeGameState, MultiplayerMessage, MultiplayerPlayer } from '@/lib/multiplayer';
 import { playLevelUp, playDamage, playWaveComplete, setMuted, isMuted, startMatchMusic, stopMatchMusic } from '@/lib/audio';
@@ -153,6 +154,7 @@ export default function CoopGame({
   const player2Ref = useRef<Player | null>(null);
   const animationFrameRef = useRef<number>(0);
   const lastTimeRef = useRef<number>(0);
+  const accRef = useRef<AccumulatorState | null>(null);
   const p1ImageRef = useRef<HTMLImageElement | null>(null);
   const p2ImageRef = useRef<HTMLImageElement | null>(null);
   const inputRef = useRef<{ keys: Set<string>; mousePos: Vector2; mouseDown: boolean }>({
@@ -704,6 +706,11 @@ export default function CoopGame({
       lastTimeRef.current = timestamp;
       const dims = dimensionsRef.current;
 
+      // Initialize accumulator on first frame (for host fixed timestep)
+      if (!accRef.current) {
+        accRef.current = createAccumulator(timestamp);
+      }
+
       // Poll gamepad input
       if (gamepadIndexRef.current !== null) {
         const gamepad = navigator.getGamepads()[gamepadIndexRef.current];
@@ -876,17 +883,28 @@ export default function CoopGame({
         }
       }
 
-      // Host: update game state
+      // Host: update game state with fixed timestep
       if (isHost && gameStateRef.current && !isPaused && !showUpgrades && gameStateRef.current.isRunning) {
-        gameStateRef.current = updateGameState(
-          gameStateRef.current,
-          deltaTime,
-          dims.width,
-          dims.height,
-          inputRef.current,
-          DEFAULT_CONFIG,
-          player2Ref.current
-        );
+        const gs = gameStateRef.current;
+        const nowMs = Date.now();
+        const slowMoFactor = (gs.slowMoUntil && nowMs < gs.slowMoUntil)
+          ? (gs.slowMoFactor || 0.3) : 1;
+
+        const { acc: newAcc, tickCount } = advanceAccumulator(accRef.current!, timestamp, slowMoFactor);
+        accRef.current = newAcc;
+
+        for (let ti = 0; ti < tickCount; ti++) {
+          gameStateRef.current = updateGameState(
+            gameStateRef.current,
+            FIXED_DT,
+            dims.width,
+            dims.height,
+            inputRef.current,
+            DEFAULT_CONFIG,
+            player2Ref.current
+          );
+          if (gameStateRef.current.isGameOver) break;
+        }
 
         // Update player 2 with remote input
         if (player2Ref.current) {
@@ -1130,6 +1148,7 @@ export default function CoopGame({
     };
 
     lastTimeRef.current = performance.now();
+    accRef.current = null; // will be initialized on first frame
     animationFrameRef.current = requestAnimationFrame(gameLoop);
 
     return () => { cancelAnimationFrame(animationFrameRef.current); };

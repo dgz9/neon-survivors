@@ -53,6 +53,19 @@ export interface Enemy {
   isSplit?: boolean;
   isElite?: boolean;
   eliteModifier?: 'swift' | 'volatile' | 'shielded';
+  // Boss AI state
+  bossPhase?: 'enter' | 'chase' | 'ring_shot' | 'spiral_shot' | 'dash' | 'summon' | 'shield' | 'rage';
+  bossTimer?: number;
+  bossPatternAngle?: number;
+  bossPatternStep?: number;
+  bossShieldHP?: number;
+  bossLevel?: number;
+  // Shared: shooter fire / boss fire timing
+  lastShot?: number;
+  // Formation spawning
+  formationId?: string;
+  formationRole?: string;
+  formationOffset?: Vector2;
 }
 
 export type EnemyType = 'chaser' | 'shooter' | 'tank' | 'swarm' | 'bomber' | 'boss' | 'zigzag' | 'splitter' | 'ghost' | 'magnet';
@@ -182,6 +195,11 @@ export interface GameState {
   peakMultiplier: number;
   // Arena
   arena: ArenaType;
+  // Meta-progression multipliers
+  metaDamageMultiplier: number;
+  metaXpMultiplier: number;
+  metaArmorMultiplier: number;
+  bossesKilledThisRun: number;
 }
 
 export type ArenaType = 'void' | 'grid' | 'cyber' | 'neon';
@@ -217,9 +235,9 @@ export const DEFAULT_CONFIG: GameConfig = {
   baseEnemySpeed: 2,
   baseEnemyHealth: 30,
   baseEnemyDamage: 10,
-  experienceToLevel: 100,
-  powerupSpawnChance: 0.13,
-  magnetRange: 100,
+  experienceToLevel: 80,
+  powerupSpawnChance: 0.15,
+  magnetRange: 120,
 };
 
 export interface LeaderboardEntry {
