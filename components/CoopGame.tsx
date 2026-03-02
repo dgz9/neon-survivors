@@ -25,6 +25,7 @@ import { CoopOverlay } from './three/CoopOverlay';
 import { TextParticles } from './three/TextParticles';
 import { PowerupSprites } from './three/PowerupSprites';
 import { HUD } from './three/HUD';
+import TouchControls from './TouchControls';
 
 interface GameOverStats {
   totalDamageDealt: number;
@@ -215,6 +216,9 @@ export default function CoopGame({
   const [otherUpgradeChoice, setOtherUpgradeChoice] = useState<string | null>(null);
   const [otherUpgradeName, setOtherUpgradeName] = useState<string | null>(null);
   const [waitingForOther, setWaitingForOther] = useState(false);
+  const [isTouchDevice, setIsTouchDevice] = useState(false);
+  const touchMovementRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
+  const touchAimRef = useRef<{ x: number; y: number } | null>(null);
   const gamepadIndexRef = useRef<number | null>(null);
   const lastPausePress = useRef<number>(0);
   const lastWaveRef = useRef<number>(1);
@@ -286,6 +290,25 @@ export default function CoopGame({
     handleResize();
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
+  // Detect touch device
+  useEffect(() => {
+    const hasTouch = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+    setIsTouchDevice(hasTouch);
+  }, []);
+
+  // Touch control callbacks
+  const handleTouchMovement = useCallback((direction: { x: number; y: number }) => {
+    touchMovementRef.current = direction;
+  }, []);
+
+  const handleTouchAim = useCallback((position: { x: number; y: number } | null) => {
+    touchAimRef.current = position;
+  }, []);
+
+  const handleTouchPause = useCallback(() => {
+    setIsPaused(p => !p);
   }, []);
 
   // Initialize game (only once)
@@ -709,6 +732,32 @@ export default function CoopGame({
       // Initialize accumulator on first frame (for host fixed timestep)
       if (!accRef.current) {
         accRef.current = createAccumulator(timestamp);
+      }
+
+      // Poll touch input
+      if (isTouchDevice) {
+        const tm = touchMovementRef.current;
+        if (tm.y < -0.3) inputRef.current.keys.add('w');
+        else inputRef.current.keys.delete('w');
+        if (tm.y > 0.3) inputRef.current.keys.add('s');
+        else inputRef.current.keys.delete('s');
+        if (tm.x < -0.3) inputRef.current.keys.add('a');
+        else inputRef.current.keys.delete('a');
+        if (tm.x > 0.3) inputRef.current.keys.add('d');
+        else inputRef.current.keys.delete('d');
+
+        const ta = touchAimRef.current;
+        if (ta) {
+          const aimPlayer = isHost ? gameStateRef.current?.player : player2Ref.current;
+          if (aimPlayer) {
+            inputRef.current.mousePos = {
+              x: aimPlayer.position.x + ta.x,
+              y: aimPlayer.position.y + ta.y,
+            };
+          }
+        }
+
+        sendGuestInputNow(false);
       }
 
       // Poll gamepad input
@@ -1152,10 +1201,10 @@ export default function CoopGame({
     animationFrameRef.current = requestAnimationFrame(gameLoop);
 
     return () => { cancelAnimationFrame(animationFrameRef.current); };
-  }, [isLoading, isPaused, showUpgrades, isHost, socket, players, finishGameOver, sendGuestInputNow]);
+  }, [isLoading, isPaused, showUpgrades, isHost, socket, players, finishGameOver, sendGuestInputNow, isTouchDevice]);
 
   return (
-    <div className="fixed inset-0 bg-brutal-black flex flex-col">
+    <div className={`fixed inset-0 bg-brutal-black flex flex-col ${isTouchDevice ? 'game-touch-area safe-area-top safe-area-bottom' : ''}`}>
       {/* Header */}
       <div className="h-12 flex items-center justify-between px-4 border-b border-white/10 bg-brutal-dark/80 backdrop-blur-sm z-10">
         <button onClick={onBack} className="font-mono text-xs uppercase tracking-wider text-white/40 hover:text-electric-pink transition-colors">
@@ -1295,6 +1344,17 @@ export default function CoopGame({
           </Canvas>
         )}
 
+        {/* Touch controls */}
+        {isTouchDevice && !isLoading && !isPaused && !showUpgrades && (
+          <TouchControls
+            onMovementChange={handleTouchMovement}
+            onAimChange={handleTouchAim}
+            onPause={handleTouchPause}
+            gameAreaRef={gameAreaRef}
+            visible={true}
+          />
+        )}
+
         {/* DOM overlays */}
         <TextParticles gameStateRef={gameStateRef} />
         <PowerupSprites gameStateRef={gameStateRef} />
@@ -1340,7 +1400,7 @@ export default function CoopGame({
       </div>
 
       {/* Controls hint */}
-      <div className="h-10 flex items-center justify-center px-4 border-t border-white/10 bg-brutal-dark/80 backdrop-blur-sm text-xs font-mono text-white/40">
+      <div className={`h-10 flex items-center justify-center px-4 border-t border-white/10 bg-brutal-dark/80 backdrop-blur-sm text-xs font-mono text-white/40 ${isTouchDevice ? 'hidden' : ''}`}>
         <span>WASD / {'\uD83C\uDFAE'} Left Stick {'\u2022'} Mouse / Right Stick to aim {'\u2022'} Auto-fire {'\u2022'} ESC / Start to pause {'\u2022'} CO-OP</span>
       </div>
     </div>

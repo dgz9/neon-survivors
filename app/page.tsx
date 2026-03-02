@@ -258,7 +258,7 @@ export default function Home() {
               <div className="h-[1px] flex-1 bg-white/10" />
               <span className="font-mono text-xs text-white/40 uppercase tracking-wider">How To Play</span>
             </div>
-            
+
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-center">
               <div className="p-4 border border-white/10 bg-brutal-dark">
                 <div className="text-2xl mb-2">⌨️</div>
@@ -280,6 +280,13 @@ export default function Home() {
                 <div className="font-mono text-xs text-white/60">Collect XP</div>
                 <div className="font-mono text-[10px] text-white/30">Level up</div>
               </div>
+            </div>
+
+            {/* Mobile controls hint */}
+            <div className="mt-4 p-3 border border-electric-cyan/20 bg-brutal-dark text-center sm:hidden">
+              <div className="text-lg mb-1">📱</div>
+              <div className="font-mono text-xs text-electric-cyan">Touch Controls</div>
+              <div className="font-mono text-[10px] text-white/40">Left thumb = move &bull; Right thumb = aim &bull; Auto-fire</div>
             </div>
           </div>
 
