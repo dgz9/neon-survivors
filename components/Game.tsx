@@ -38,6 +38,7 @@ import { GameScene } from './three/GameScene';
 import { TextParticles } from './three/TextParticles';
 import { PowerupSprites } from './three/PowerupSprites';
 import { HUD } from './three/HUD';
+import TouchControls from './TouchControls';
 
 interface GameOverStats {
   totalDamageDealt: number;
@@ -99,6 +100,10 @@ export default function Game({ playerImageUrl, playerName, arena = 'grid', onGam
   const [soundEnabled, setSoundEnabled] = useState(() => !isMuted());
   const [playerImage, setPlayerImage] = useState<HTMLImageElement | null>(null);
 
+  const [isTouchDevice, setIsTouchDevice] = useState(false);
+  const touchMovementRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
+  const touchAimRef = useRef<{ x: number; y: number } | null>(null);
+
   const gamepadIndexRef = useRef<number | null>(null);
   const lastPausePress = useRef<number>(0);
   const lastWaveRef = useRef<number>(1);
@@ -154,6 +159,25 @@ export default function Game({ playerImageUrl, playerName, arena = 'grid', onGam
 
   useEffect(() => {
     setSoundEnabled(!isMuted());
+  }, []);
+
+  // Detect touch device
+  useEffect(() => {
+    const hasTouch = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+    setIsTouchDevice(hasTouch);
+  }, []);
+
+  // Touch control callbacks
+  const handleTouchMovement = useCallback((direction: { x: number; y: number }) => {
+    touchMovementRef.current = direction;
+  }, []);
+
+  const handleTouchAim = useCallback((position: { x: number; y: number } | null) => {
+    touchAimRef.current = position;
+  }, []);
+
+  const handleTouchPause = useCallback(() => {
+    setIsPaused(p => !p);
   }, []);
 
   useEffect(() => {
@@ -260,6 +284,28 @@ export default function Game({ playerImageUrl, playerName, arena = 'grid', onGam
       // Initialize accumulator on first frame
       if (!accRef.current) {
         accRef.current = createAccumulator(timestamp);
+      }
+
+      // Poll touch input
+      if (isTouchDevice) {
+        const tm = touchMovementRef.current;
+        if (tm.y < -0.3) inputRef.current.keys.add('w');
+        else inputRef.current.keys.delete('w');
+        if (tm.y > 0.3) inputRef.current.keys.add('s');
+        else inputRef.current.keys.delete('s');
+        if (tm.x < -0.3) inputRef.current.keys.add('a');
+        else inputRef.current.keys.delete('a');
+        if (tm.x > 0.3) inputRef.current.keys.add('d');
+        else inputRef.current.keys.delete('d');
+
+        // Touch aim: offset from player position
+        const ta = touchAimRef.current;
+        if (ta && gameStateRef.current) {
+          inputRef.current.mousePos = {
+            x: gameStateRef.current.player.position.x + ta.x,
+            y: gameStateRef.current.player.position.y + ta.y,
+          };
+        }
       }
 
       // Poll gamepad input
@@ -456,10 +502,10 @@ export default function Game({ playerImageUrl, playerName, arena = 'grid', onGam
     return () => {
       cancelAnimationFrame(animationFrameRef.current);
     };
-  }, [isLoading, isPaused, showUpgrades, onGameOver]);
+  }, [isLoading, isPaused, showUpgrades, onGameOver, isTouchDevice]);
 
   return (
-    <div className="fixed inset-0 bg-brutal-black flex flex-col">
+    <div className={`fixed inset-0 bg-brutal-black flex flex-col ${isTouchDevice ? 'game-touch-area safe-area-top safe-area-bottom' : ''}`}>
       {/* Header */}
       <div className="h-12 flex items-center justify-between px-4 border-b border-white/10 bg-brutal-dark/80 backdrop-blur-sm z-10">
         <button
@@ -598,6 +644,17 @@ export default function Game({ playerImageUrl, playerName, arena = 'grid', onGam
           </Canvas>
         )}
 
+        {/* Touch controls */}
+        {isTouchDevice && !isLoading && !isPaused && !showUpgrades && (
+          <TouchControls
+            onMovementChange={handleTouchMovement}
+            onAimChange={handleTouchAim}
+            onPause={handleTouchPause}
+            gameAreaRef={gameAreaRef}
+            visible={true}
+          />
+        )}
+
         {/* DOM overlays */}
         <TextParticles gameStateRef={gameStateRef} />
         <PowerupSprites gameStateRef={gameStateRef} />
@@ -665,7 +722,7 @@ export default function Game({ playerImageUrl, playerName, arena = 'grid', onGam
       )}
 
       {/* Controls hint */}
-      <div className="h-10 flex items-center justify-between px-4 border-t border-white/10 bg-brutal-dark/80 backdrop-blur-sm text-xs font-mono text-white/40">
+      <div className={`h-10 flex items-center justify-between px-4 border-t border-white/10 bg-brutal-dark/80 backdrop-blur-sm text-xs font-mono text-white/40 ${isTouchDevice ? 'hidden' : ''}`}>
         <button
           onClick={() => setShowPowerupLegend(p => !p)}
           className="hover:text-electric-cyan transition-colors"
