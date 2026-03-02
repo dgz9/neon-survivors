@@ -26,7 +26,7 @@ export function updateGameState(
   deltaTime: number,
   width: number,
   height: number,
-  input: { keys: Set<string>; mousePos: Vector2; mouseDown: boolean },
+  input: { keys: Set<string>; mousePos: Vector2; mouseDown: boolean; touchMovement?: Vector2 },
   config: GameConfig = DEFAULT_CONFIG,
   player2?: Player | null
 ): GameState {
