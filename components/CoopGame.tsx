@@ -158,7 +158,7 @@ export default function CoopGame({
   const accRef = useRef<AccumulatorState | null>(null);
   const p1ImageRef = useRef<HTMLImageElement | null>(null);
   const p2ImageRef = useRef<HTMLImageElement | null>(null);
-  const inputRef = useRef<{ keys: Set<string>; mousePos: Vector2; mouseDown: boolean }>({
+  const inputRef = useRef<{ keys: Set<string>; mousePos: Vector2; mouseDown: boolean; touchMovement?: Vector2 }>({
     keys: new Set(),
     mousePos: { x: 0, y: 0 },
     mouseDown: false,
@@ -735,29 +735,57 @@ export default function CoopGame({
       }
 
       // Poll touch input
-      if (isTouchDevice) {
+      if (isTouchDevice && gameStateRef.current) {
+        // Pass analog movement directly for smooth proportional control
+        inputRef.current.touchMovement = touchMovementRef.current;
+
+        // Also map to WASD keys for co-op remote input sync
         const tm = touchMovementRef.current;
-        if (tm.y < -0.3) inputRef.current.keys.add('w');
+        if (tm.y < -0.15) inputRef.current.keys.add('w');
         else inputRef.current.keys.delete('w');
-        if (tm.y > 0.3) inputRef.current.keys.add('s');
+        if (tm.y > 0.15) inputRef.current.keys.add('s');
         else inputRef.current.keys.delete('s');
-        if (tm.x < -0.3) inputRef.current.keys.add('a');
+        if (tm.x < -0.15) inputRef.current.keys.add('a');
         else inputRef.current.keys.delete('a');
-        if (tm.x > 0.3) inputRef.current.keys.add('d');
+        if (tm.x > 0.15) inputRef.current.keys.add('d');
         else inputRef.current.keys.delete('d');
 
+        // Touch aim: offset from player position using right joystick
         const ta = touchAimRef.current;
-        if (ta) {
-          const aimPlayer = isHost ? gameStateRef.current?.player : player2Ref.current;
-          if (aimPlayer) {
+        const aimPlayer = isHost ? gameStateRef.current?.player : player2Ref.current;
+        if (ta && aimPlayer) {
+          inputRef.current.mousePos = {
+            x: aimPlayer.position.x + ta.x,
+            y: aimPlayer.position.y + ta.y,
+          };
+        } else if (aimPlayer) {
+          // Auto-aim at nearest enemy when right joystick is not active
+          const enemies = gameStateRef.current.enemies;
+          let nearestDist = Infinity;
+          let nearestPos: Vector2 | null = null;
+          for (let i = 0; i < enemies.length; i++) {
+            const e = enemies[i];
+            const dx = e.position.x - aimPlayer.position.x;
+            const dy = e.position.y - aimPlayer.position.y;
+            const dist = dx * dx + dy * dy;
+            if (dist < nearestDist) {
+              nearestDist = dist;
+              nearestPos = e.position;
+            }
+          }
+          if (nearestPos) {
+            inputRef.current.mousePos = { x: nearestPos.x, y: nearestPos.y };
+          } else {
             inputRef.current.mousePos = {
-              x: aimPlayer.position.x + ta.x,
-              y: aimPlayer.position.y + ta.y,
+              x: aimPlayer.position.x + 200,
+              y: aimPlayer.position.y,
             };
           }
         }
 
         sendGuestInputNow(false);
+      } else {
+        inputRef.current.touchMovement = undefined;
       }
 
       // Poll gamepad input

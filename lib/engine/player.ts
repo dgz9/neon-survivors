@@ -2,7 +2,7 @@ import { Player, GameConfig, Vector2 } from '@/types/game';
 
 export function updatePlayer(
   player: Player,
-  input: { keys: Set<string>; mousePos: Vector2; mouseDown: boolean },
+  input: { keys: Set<string>; mousePos: Vector2; mouseDown: boolean; touchMovement?: Vector2 },
   width: number,
   height: number,
   config: GameConfig,
@@ -11,15 +11,24 @@ export function updatePlayer(
   let targetVx = 0;
   let targetVy = 0;
 
-  if (input.keys.has('w') || input.keys.has('arrowup')) targetVy -= 1;
-  if (input.keys.has('s') || input.keys.has('arrowdown')) targetVy += 1;
-  if (input.keys.has('a') || input.keys.has('arrowleft')) targetVx -= 1;
-  if (input.keys.has('d') || input.keys.has('arrowright')) targetVx += 1;
+  // Use analog touch movement if available, otherwise fall back to keyboard
+  const tm = input.touchMovement;
+  if (tm && (Math.abs(tm.x) > 0.01 || Math.abs(tm.y) > 0.01)) {
+    const len = Math.sqrt(tm.x * tm.x + tm.y * tm.y);
+    const clamped = Math.min(len, 1);
+    targetVx = (tm.x / len) * clamped * player.speed;
+    targetVy = (tm.y / len) * clamped * player.speed;
+  } else {
+    if (input.keys.has('w') || input.keys.has('arrowup')) targetVy -= 1;
+    if (input.keys.has('s') || input.keys.has('arrowdown')) targetVy += 1;
+    if (input.keys.has('a') || input.keys.has('arrowleft')) targetVx -= 1;
+    if (input.keys.has('d') || input.keys.has('arrowright')) targetVx += 1;
 
-  const length = Math.sqrt(targetVx * targetVx + targetVy * targetVy);
-  if (length > 0) {
-    targetVx = (targetVx / length) * player.speed;
-    targetVy = (targetVy / length) * player.speed;
+    const length = Math.sqrt(targetVx * targetVx + targetVy * targetVy);
+    if (length > 0) {
+      targetVx = (targetVx / length) * player.speed;
+      targetVy = (targetVy / length) * player.speed;
+    }
   }
 
   const acceleration = 0.25;

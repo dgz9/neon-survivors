@@ -63,7 +63,7 @@ export default function Game({ playerImageUrl, playerName, arena = 'grid', onGam
   const animationFrameRef = useRef<number>(0);
   const lastTimeRef = useRef<number>(0);
   const accRef = useRef<AccumulatorState | null>(null);
-  const inputRef = useRef<{ keys: Set<string>; mousePos: Vector2; mouseDown: boolean }>({
+  const inputRef = useRef<{ keys: Set<string>; mousePos: Vector2; mouseDown: boolean; touchMovement?: Vector2 }>({
     keys: new Set(),
     mousePos: { x: 0, y: 0 },
     mouseDown: false,
@@ -287,25 +287,54 @@ export default function Game({ playerImageUrl, playerName, arena = 'grid', onGam
       }
 
       // Poll touch input
-      if (isTouchDevice) {
-        const tm = touchMovementRef.current;
-        if (tm.y < -0.3) inputRef.current.keys.add('w');
-        else inputRef.current.keys.delete('w');
-        if (tm.y > 0.3) inputRef.current.keys.add('s');
-        else inputRef.current.keys.delete('s');
-        if (tm.x < -0.3) inputRef.current.keys.add('a');
-        else inputRef.current.keys.delete('a');
-        if (tm.x > 0.3) inputRef.current.keys.add('d');
-        else inputRef.current.keys.delete('d');
+      if (isTouchDevice && gameStateRef.current) {
+        // Pass analog movement directly for smooth proportional control
+        inputRef.current.touchMovement = touchMovementRef.current;
 
-        // Touch aim: offset from player position
+        // Touch aim: offset from player position using right joystick
         const ta = touchAimRef.current;
-        if (ta && gameStateRef.current) {
+        const player = gameStateRef.current.player;
+        if (ta) {
           inputRef.current.mousePos = {
-            x: gameStateRef.current.player.position.x + ta.x,
-            y: gameStateRef.current.player.position.y + ta.y,
+            x: player.position.x + ta.x,
+            y: player.position.y + ta.y,
           };
+        } else {
+          // Auto-aim at nearest enemy when right joystick is not active
+          const enemies = gameStateRef.current.enemies;
+          const enemyCount = gameStateRef.current.enemies.length;
+          let nearestDist = Infinity;
+          let nearestPos: Vector2 | null = null;
+          for (let i = 0; i < enemyCount; i++) {
+            const e = enemies[i];
+            const dx = e.position.x - player.position.x;
+            const dy = e.position.y - player.position.y;
+            const dist = dx * dx + dy * dy;
+            if (dist < nearestDist) {
+              nearestDist = dist;
+              nearestPos = e.position;
+            }
+          }
+          if (nearestPos) {
+            inputRef.current.mousePos = { x: nearestPos.x, y: nearestPos.y };
+          } else {
+            // No enemies: aim in movement direction or to the right
+            const tm = touchMovementRef.current;
+            if (Math.abs(tm.x) > 0.1 || Math.abs(tm.y) > 0.1) {
+              inputRef.current.mousePos = {
+                x: player.position.x + tm.x * 200,
+                y: player.position.y + tm.y * 200,
+              };
+            } else {
+              inputRef.current.mousePos = {
+                x: player.position.x + 200,
+                y: player.position.y,
+              };
+            }
+          }
         }
+      } else {
+        inputRef.current.touchMovement = undefined;
       }
 
       // Poll gamepad input
