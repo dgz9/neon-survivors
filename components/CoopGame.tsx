@@ -231,6 +231,7 @@ export default function CoopGame({
   const SYNC_INTERVAL = 40;
   const INPUT_SEND_INTERVAL = 16;
 
+  const mobileScale = isTouchDevice ? 0.7 : 1;
   const myPlayer = players.find(p => p.id === socket.id);
   const otherPlayer = players.find(p => p.id !== socket.id);
 
@@ -314,11 +315,14 @@ export default function CoopGame({
   // Initialize game (only once)
   const initGame = useCallback(async () => {
     const dims = dimensionsRef.current;
+    // Use effective dimensions (larger on mobile) so game fills the zoomed-out camera view
+    const effectiveWidth = Math.floor(dims.width / mobileScale);
+    const effectiveHeight = Math.floor(dims.height / mobileScale);
     if (!isHost) {
       let state = createInitialGameState(
         otherPlayer?.imageUrl || '',
-        dims.width,
-        dims.height,
+        effectiveWidth,
+        effectiveHeight,
         DEFAULT_CONFIG
       );
       state = { ...state, arena };
@@ -350,8 +354,8 @@ export default function CoopGame({
 
     let state = createInitialGameState(
       myPlayer?.imageUrl || '',
-      dims.width,
-      dims.height,
+      effectiveWidth,
+      effectiveHeight,
       DEFAULT_CONFIG
     );
     state = { ...state, arena };
@@ -360,7 +364,7 @@ export default function CoopGame({
     p1ImageRef.current = state.player.image;
 
     const p2: Player = {
-      position: { x: dims.width / 2 + 50, y: dims.height / 2 },
+      position: { x: effectiveWidth / 2 + 50, y: effectiveHeight / 2 },
       velocity: { x: 0, y: 0 },
       radius: DEFAULT_CONFIG.playerRadius,
       color: PLAYER_COLORS[1],
@@ -408,7 +412,7 @@ export default function CoopGame({
     state = startGame(state);
     gameStateRef.current = state;
     setIsLoading(false);
-  }, [isHost, myPlayer, otherPlayer, arena]);
+  }, [isHost, myPlayer, otherPlayer, arena, mobileScale]);
 
   useEffect(() => {
     if (dimensionsRef.current.width > 0 && dimensionsRef.current.height > 0 && !gameInitializedRef.current) {
@@ -728,6 +732,8 @@ export default function CoopGame({
       const deltaTime = Math.min((timestamp - lastTimeRef.current) / 16.67, 3);
       lastTimeRef.current = timestamp;
       const dims = dimensionsRef.current;
+      const effectiveWidth = Math.floor(dims.width / mobileScale);
+      const effectiveHeight = Math.floor(dims.height / mobileScale);
 
       // Initialize accumulator on first frame (for host fixed timestep)
       if (!accRef.current) {
@@ -863,8 +869,8 @@ export default function CoopGame({
           p2.velocity.y = dy * p2.speed;
           p2.position.x += p2.velocity.x * deltaTime;
           p2.position.y += p2.velocity.y * deltaTime;
-          p2.position.x = Math.max(p2.radius, Math.min(dims.width - p2.radius, p2.position.x));
-          p2.position.y = Math.max(p2.radius, Math.min(dims.height - p2.radius, p2.position.y));
+          p2.position.x = Math.max(p2.radius, Math.min(effectiveWidth - p2.radius, p2.position.x));
+          p2.position.y = Math.max(p2.radius, Math.min(effectiveHeight - p2.radius, p2.position.y));
 
           if (targetStateRef.current.player2Pos) {
             const baseTarget = targetStateRef.current.player2Pos;
@@ -945,8 +951,8 @@ export default function CoopGame({
             }))
             .filter(proj =>
               proj.lifeMs > 0 &&
-              proj.position.x >= -20 && proj.position.x <= dims.width + 20 &&
-              proj.position.y >= -20 && proj.position.y <= dims.height + 20
+              proj.position.x >= -20 && proj.position.x <= effectiveWidth + 20 &&
+              proj.position.y >= -20 && proj.position.y <= effectiveHeight + 20
             );
         }
 
@@ -974,8 +980,8 @@ export default function CoopGame({
           gameStateRef.current = updateGameState(
             gameStateRef.current,
             FIXED_DT,
-            dims.width,
-            dims.height,
+            effectiveWidth,
+            effectiveHeight,
             inputRef.current,
             DEFAULT_CONFIG,
             player2Ref.current
@@ -1001,8 +1007,8 @@ export default function CoopGame({
           p2.velocity.y = dy * p2.speed;
           p2.position.x += p2.velocity.x * deltaTime;
           p2.position.y += p2.velocity.y * deltaTime;
-          p2.position.x = Math.max(p2.radius, Math.min(dims.width - p2.radius, p2.position.x));
-          p2.position.y = Math.max(p2.radius, Math.min(dims.height - p2.radius, p2.position.y));
+          p2.position.x = Math.max(p2.radius, Math.min(effectiveWidth - p2.radius, p2.position.x));
+          p2.position.y = Math.max(p2.radius, Math.min(effectiveHeight - p2.radius, p2.position.y));
 
           // P2 fires
           const now = Date.now();
@@ -1229,7 +1235,7 @@ export default function CoopGame({
     animationFrameRef.current = requestAnimationFrame(gameLoop);
 
     return () => { cancelAnimationFrame(animationFrameRef.current); };
-  }, [isLoading, isPaused, showUpgrades, isHost, socket, players, finishGameOver, sendGuestInputNow, isTouchDevice]);
+  }, [isLoading, isPaused, showUpgrades, isHost, socket, players, finishGameOver, sendGuestInputNow, isTouchDevice, mobileScale]);
 
   return (
     <div className={`fixed inset-0 bg-brutal-black flex flex-col ${isTouchDevice ? 'game-touch-area safe-area-top safe-area-bottom' : ''}`}>
