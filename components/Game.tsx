@@ -535,8 +535,8 @@ export default function Game({ playerImageUrl, playerName, arena = 'grid', onGam
 
   return (
     <div className={`fixed inset-0 bg-brutal-black flex flex-col ${isTouchDevice ? 'game-touch-area safe-area-top safe-area-bottom' : ''}`}>
-      {/* Header */}
-      <div className="h-12 flex items-center justify-between px-4 border-b border-white/10 bg-brutal-dark/80 backdrop-blur-sm z-10">
+      {/* Header - hidden on mobile */}
+      <div className={`h-12 flex items-center justify-between px-4 border-b border-white/10 bg-brutal-dark/80 backdrop-blur-sm z-10 ${isTouchDevice ? 'hidden' : ''}`}>
         <button
           onClick={onBack}
           className="font-mono text-xs uppercase tracking-wider text-white/40 hover:text-electric-pink transition-colors"
@@ -669,7 +669,7 @@ export default function Game({ playerImageUrl, playerName, arena = 'grid', onGam
             gl={{ antialias: false, alpha: false }}
             style={{ position: 'absolute', inset: 0, background: '#0a0a0a' }}
           >
-            <GameScene gameStateRef={gameStateRef} playerImage={playerImage} />
+            <GameScene gameStateRef={gameStateRef} playerImage={playerImage} mobileScale={isTouchDevice ? 0.7 : 1} />
           </Canvas>
         )}
 
@@ -687,10 +687,10 @@ export default function Game({ playerImageUrl, playerName, arena = 'grid', onGam
         {/* DOM overlays */}
         <TextParticles gameStateRef={gameStateRef} />
         <PowerupSprites gameStateRef={gameStateRef} />
-        <HUD displayState={displayState} />
+        <HUD displayState={displayState} isMobile={isTouchDevice} />
 
-        {/* Stats display - permanent bonuses and active buffs */}
-        {displayState && !isLoading && (
+        {/* Stats display - permanent bonuses and active buffs (hidden on mobile) */}
+        {displayState && !isLoading && !isTouchDevice && (
           <div className="absolute top-2 left-2 flex flex-col gap-1 text-xs font-mono z-10 pointer-events-none">
             {displayState.speedBonus > 0 && (
               <div className="flex items-center gap-2 bg-brutal-dark/80 px-2 py-1 border border-electric-yellow/30">
@@ -746,6 +746,50 @@ export default function Game({ playerImageUrl, playerName, arena = 'grid', onGam
             <div className="flex items-center gap-3"><span className="text-lg">{'\uD83E\uDDF2'}</span><span className="text-electric-purple">Magnet</span><span className="text-white/40">Pulls XP orbs (temp)</span></div>
             <div className="flex items-center gap-3"><span className="text-lg">{'\uD83D\uDCA3'}</span><span className="text-electric-orange">Bomb</span><span className="text-white/40">Clears nearby enemies</span></div>
             <div className="flex items-center gap-3"><span className="text-lg">{'\u2728'}</span><span className="text-electric-cyan">XP</span><span className="text-white/40">+50 experience</span></div>
+          </div>
+        </div>
+      )}
+
+      {/* Mobile bottom HUD bar */}
+      {isTouchDevice && displayState && !isLoading && (
+        <div className="h-14 flex items-center justify-between px-3 border-t border-white/10 bg-brutal-dark/95 backdrop-blur-sm z-10 font-mono">
+          {/* HP */}
+          <div className="flex flex-col gap-0.5" style={{ width: '28%' }}>
+            <div className="text-[9px] text-white/50">HP {Math.ceil(displayState.health)}/{displayState.maxHealth}</div>
+            <div className="w-full h-2 bg-white/10 overflow-hidden">
+              <div
+                className="h-full transition-all duration-200"
+                style={{
+                  width: `${Math.max(0, Math.min(100, (displayState.health / displayState.maxHealth) * 100))}%`,
+                  background: displayState.health / displayState.maxHealth > 0.5
+                    ? '#39ff14' : displayState.health / displayState.maxHealth > 0.25
+                    ? '#e4ff1a' : '#ff2d6a',
+                }}
+              />
+            </div>
+          </div>
+          {/* Score + Level */}
+          <div className="flex flex-col items-center gap-0.5">
+            <div className="text-xs text-white font-bold" style={{ textShadow: '0 0 6px rgba(0,240,255,0.5)' }}>
+              {displayState.score.toLocaleString()}
+              {displayState.multiplier > 1 && (
+                <span className="text-[9px] ml-1" style={{ color: '#e4ff1a' }}>x{displayState.multiplier.toFixed(1)}</span>
+              )}
+            </div>
+            <div className="text-[9px] text-electric-cyan">LV{displayState.level} W{displayState.wave}</div>
+          </div>
+          {/* XP */}
+          <div className="flex flex-col gap-0.5" style={{ width: '28%' }}>
+            <div className="text-[9px] text-white/50 text-right">XP {Math.floor(displayState.experience)}/{displayState.experienceToLevel}</div>
+            <div className="w-full h-2 bg-white/10 overflow-hidden">
+              <div
+                className="h-full transition-all duration-200"
+                style={{
+                  width: `${Math.max(0, Math.min(100, (displayState.experience / displayState.experienceToLevel) * 100))}%`,
+                  background: '#00f0ff',
+                }}
+              />
+            </div>
           </div>
         </div>
       )}

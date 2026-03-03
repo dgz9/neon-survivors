@@ -29,6 +29,7 @@ interface CoopGameSceneProps {
   player2Image: HTMLImageElement | null;
   localPredictedProjectilesRef: React.RefObject<LocalPredictedProjectile[]>;
   isHost: boolean;
+  mobileScale?: number;
 }
 
 const MAX_PREDICTED = 50;
@@ -36,13 +37,14 @@ const dummyObj = new THREE.Object3D();
 const tmpColor = new THREE.Color();
 
 // Offsets all children so game coords (x, -y) align with R3F's centered ortho camera
-function SceneRoot({ children }: { children: React.ReactNode }) {
+function SceneRoot({ children, mobileScale = 1 }: { children: React.ReactNode; mobileScale?: number }) {
   const groupRef = useRef<THREE.Group>(null);
   const { size } = useThree();
 
   useFrame(() => {
     if (groupRef.current) {
       groupRef.current.position.set(-size.width / 2, size.height / 2, 0);
+      groupRef.current.scale.set(mobileScale, mobileScale, 1);
     }
   });
 
@@ -115,10 +117,11 @@ export function CoopGameScene({
   player2Image,
   localPredictedProjectilesRef,
   isHost,
+  mobileScale = 1,
 }: CoopGameSceneProps) {
   return (
     <>
-      <SceneRoot>
+      <SceneRoot mobileScale={mobileScale}>
         <ArenaBackground gameStateRef={gameStateRef} />
         <XPOrbInstances gameStateRef={gameStateRef} />
         <ParticleSystem gameStateRef={gameStateRef} />
