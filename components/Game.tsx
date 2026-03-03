@@ -133,12 +133,17 @@ export default function Game({ playerImageUrl, playerName, arena = 'grid', onGam
     return () => window.removeEventListener('resize', handleResize);
   }, []);
 
+  const mobileScale = isTouchDevice ? 0.7 : 1;
+
   // Initialize game (only once)
   const initGame = useCallback(async () => {
     setIsLoading(true);
 
     const dims = dimensionsRef.current;
-    let state = createInitialGameState(playerImageUrl, dims.width, dims.height, DEFAULT_CONFIG);
+    // Use effective dimensions (larger on mobile) so game fills the zoomed-out camera view
+    const effectiveWidth = Math.floor(dims.width / mobileScale);
+    const effectiveHeight = Math.floor(dims.height / mobileScale);
+    let state = createInitialGameState(playerImageUrl, effectiveWidth, effectiveHeight, DEFAULT_CONFIG);
     state = { ...state, arena };
     const meta = loadMetaProgression();
     state = applyMetaToInitialState(state, meta);
@@ -148,7 +153,7 @@ export default function Game({ playerImageUrl, playerName, arena = 'grid', onGam
     setPlayerImage(state.player.image);
     gameStateRef.current = state;
     setIsLoading(false);
-  }, [playerImageUrl, arena]);
+  }, [playerImageUrl, arena, mobileScale]);
 
   useEffect(() => {
     if (dimensionsRef.current.width > 0 && dimensionsRef.current.height > 0 && !gameInitializedRef.current) {
@@ -384,12 +389,14 @@ export default function Game({ playerImageUrl, playerName, arena = 'grid', onGam
         accRef.current = acc;
 
         const dims = dimensionsRef.current;
+        const effectiveWidth = Math.floor(dims.width / mobileScale);
+        const effectiveHeight = Math.floor(dims.height / mobileScale);
         for (let i = 0; i < tickCount; i++) {
           gameStateRef.current = updateGameState(
             gameStateRef.current,
             FIXED_DT,
-            dims.width,
-            dims.height,
+            effectiveWidth,
+            effectiveHeight,
             inputRef.current,
             DEFAULT_CONFIG
           );
@@ -531,7 +538,7 @@ export default function Game({ playerImageUrl, playerName, arena = 'grid', onGam
     return () => {
       cancelAnimationFrame(animationFrameRef.current);
     };
-  }, [isLoading, isPaused, showUpgrades, onGameOver, isTouchDevice]);
+  }, [isLoading, isPaused, showUpgrades, onGameOver, isTouchDevice, mobileScale]);
 
   return (
     <div className={`fixed inset-0 bg-brutal-black flex flex-col ${isTouchDevice ? 'game-touch-area safe-area-top safe-area-bottom' : ''}`}>
