@@ -17,6 +17,7 @@ interface HUDProps {
     waveAnnounceTime?: number;
     gameTime: number;
   } | null;
+  isMobile?: boolean;
 }
 
 const WEAPON_ICONS: Record<string, string> = {
@@ -27,7 +28,7 @@ const WEAPON_ICONS: Record<string, string> = {
   missile: '\u{1F680}',
 };
 
-export function HUD({ displayState }: HUDProps) {
+export function HUD({ displayState, isMobile = false }: HUDProps) {
   if (!displayState) return null;
 
   const {
@@ -100,8 +101,8 @@ export function HUD({ displayState }: HUDProps) {
         )}
       </div>
 
-      {/* Health Bar - Bottom Left */}
-      <div className="absolute bottom-4 left-4" style={{ width: 180 }}>
+      {/* Health Bar - Bottom Left (hidden on mobile - shown in bottom bar) */}
+      <div className={`absolute bottom-4 left-4 ${isMobile ? 'hidden' : ''}`} style={{ width: 180 }}>
         <div className="text-xs text-gray-300 mb-1" style={{ textShadow: '0 0 4px rgba(0,0,0,0.8)' }}>
           HP {Math.ceil(health)}/{maxHealth}
         </div>
@@ -124,9 +125,9 @@ export function HUD({ displayState }: HUDProps) {
         </div>
       </div>
 
-      {/* XP Bar - Bottom Center */}
+      {/* XP Bar - Bottom Center (hidden on mobile - shown in bottom bar) */}
       <div
-        className="absolute bottom-4 left-1/2"
+        className={`absolute bottom-4 left-1/2 ${isMobile ? 'hidden' : ''}`}
         style={{ transform: 'translateX(-50%)', width: 240 }}
       >
         <div className="text-xs text-center text-gray-300 mb-1" style={{ textShadow: '0 0 4px rgba(0,0,0,0.8)' }}>
@@ -147,8 +148,8 @@ export function HUD({ displayState }: HUDProps) {
         </div>
       </div>
 
-      {/* Weapons - Bottom Right */}
-      <div className="absolute bottom-4 right-4 text-right">
+      {/* Weapons - Bottom Right (hidden on mobile - shown in bottom bar) */}
+      <div className={`absolute bottom-4 right-4 text-right ${isMobile ? 'hidden' : ''}`}>
         {weapons.map((w, i) => (
           <div
             key={i}

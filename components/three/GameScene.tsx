@@ -16,26 +16,28 @@ import { PostFX } from './PostFX';
 interface GameSceneProps {
   gameStateRef: React.RefObject<GameState | null>;
   playerImage: HTMLImageElement | null;
+  mobileScale?: number;
 }
 
 // Offsets all children so game coords (x, -y) align with R3F's centered ortho camera
-function SceneRoot({ children }: { children: React.ReactNode }) {
+function SceneRoot({ children, mobileScale = 1 }: { children: React.ReactNode; mobileScale?: number }) {
   const groupRef = useRef<THREE.Group>(null);
   const { size } = useThree();
 
   useFrame(() => {
     if (groupRef.current) {
       groupRef.current.position.set(-size.width / 2, size.height / 2, 0);
+      groupRef.current.scale.set(mobileScale, mobileScale, 1);
     }
   });
 
   return <group ref={groupRef}>{children}</group>;
 }
 
-export function GameScene({ gameStateRef, playerImage }: GameSceneProps) {
+export function GameScene({ gameStateRef, playerImage, mobileScale = 1 }: GameSceneProps) {
   return (
     <>
-      <SceneRoot>
+      <SceneRoot mobileScale={mobileScale}>
         <ArenaBackground gameStateRef={gameStateRef} />
         <XPOrbInstances gameStateRef={gameStateRef} />
         <ParticleSystem gameStateRef={gameStateRef} />

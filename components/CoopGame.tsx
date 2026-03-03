@@ -1233,8 +1233,8 @@ export default function CoopGame({
 
   return (
     <div className={`fixed inset-0 bg-brutal-black flex flex-col ${isTouchDevice ? 'game-touch-area safe-area-top safe-area-bottom' : ''}`}>
-      {/* Header */}
-      <div className="h-12 flex items-center justify-between px-4 border-b border-white/10 bg-brutal-dark/80 backdrop-blur-sm z-10">
+      {/* Header - hidden on mobile */}
+      <div className={`h-12 flex items-center justify-between px-4 border-b border-white/10 bg-brutal-dark/80 backdrop-blur-sm z-10 ${isTouchDevice ? 'hidden' : ''}`}>
         <button onClick={onBack} className="font-mono text-xs uppercase tracking-wider text-white/40 hover:text-electric-pink transition-colors">
           {'<--'} EXIT
         </button>
@@ -1368,6 +1368,7 @@ export default function CoopGame({
               player2Image={p2ImageRef.current}
               localPredictedProjectilesRef={localPredictedProjectilesRef}
               isHost={isHost}
+              mobileScale={isTouchDevice ? 0.7 : 1}
             />
           </Canvas>
         )}
@@ -1402,10 +1403,10 @@ export default function CoopGame({
           weapons: displayState.weapons,
           waveAnnounceTime: displayState.waveAnnounceTime,
           gameTime: displayState.gameTime,
-        } : null} />
+        } : null} isMobile={isTouchDevice} />
 
-        {/* P1/P2 Health bars */}
-        {displayState && !isLoading && (
+        {/* P1/P2 Health bars (hidden on mobile - shown in bottom bar) */}
+        {displayState && !isLoading && !isTouchDevice && (
           <div className="absolute top-2 left-2 flex flex-col gap-2 z-10 pointer-events-none">
             <div className="flex items-center gap-2 bg-brutal-dark/80 px-3 py-2 border border-electric-cyan/30">
               <span className="w-2 h-2 rounded-full bg-electric-cyan" />
@@ -1426,6 +1427,44 @@ export default function CoopGame({
           </div>
         )}
       </div>
+
+      {/* Mobile bottom HUD bar */}
+      {isTouchDevice && displayState && !isLoading && (
+        <div className="h-14 flex items-center justify-between px-3 border-t border-white/10 bg-brutal-dark/95 backdrop-blur-sm z-10 font-mono">
+          {/* P1 HP */}
+          <div className="flex flex-col gap-0.5" style={{ width: '25%' }}>
+            <div className="flex items-center gap-1">
+              <span className="w-1.5 h-1.5 rounded-full bg-electric-cyan" />
+              <span className="text-[9px] text-electric-cyan">P1</span>
+              <span className="text-[9px] text-white/50">{Math.max(0, Math.ceil(displayState.health))}</span>
+            </div>
+            <div className="w-full h-1.5 bg-white/10 overflow-hidden">
+              <div className="h-full bg-electric-cyan transition-all" style={{ width: `${Math.max(0, (displayState.health / displayState.maxHealth) * 100)}%` }} />
+            </div>
+          </div>
+          {/* Score + Level */}
+          <div className="flex flex-col items-center gap-0.5">
+            <div className="text-xs text-white font-bold" style={{ textShadow: '0 0 6px rgba(0,240,255,0.5)' }}>
+              {displayState.score.toLocaleString()}
+              {displayState.multiplier > 1 && (
+                <span className="text-[9px] ml-1" style={{ color: '#e4ff1a' }}>x{displayState.multiplier.toFixed(1)}</span>
+              )}
+            </div>
+            <div className="text-[9px] text-electric-cyan">LV{displayState.level} W{displayState.wave}</div>
+          </div>
+          {/* P2 HP */}
+          <div className="flex flex-col gap-0.5" style={{ width: '25%' }}>
+            <div className="flex items-center gap-1 justify-end">
+              <span className="text-[9px] text-white/50">{Math.max(0, Math.ceil(displayState.health2))}</span>
+              <span className="text-[9px] text-electric-pink">P2</span>
+              <span className="w-1.5 h-1.5 rounded-full bg-electric-pink" />
+            </div>
+            <div className="w-full h-1.5 bg-white/10 overflow-hidden">
+              <div className="h-full bg-electric-pink transition-all" style={{ width: `${Math.max(0, (displayState.health2 / displayState.maxHealth2) * 100)}%` }} />
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Controls hint */}
       <div className={`h-10 flex items-center justify-center px-4 border-t border-white/10 bg-brutal-dark/80 backdrop-blur-sm text-xs font-mono text-white/40 ${isTouchDevice ? 'hidden' : ''}`}>
