@@ -1,5 +1,6 @@
 import { Player, Vector2, WEAPON_CONFIGS } from '@/types/game';
 import { particlePool, projectilePool, generateId } from './context';
+import { emitParticle } from './effects';
 import { COLORS } from '../colors';
 
 export function emitWeaponMuzzleEffect(
@@ -8,6 +9,27 @@ export function emitWeaponMuzzleEffect(
   shotAngle: number,
   level: number
 ): void {
+  // Shared muzzle core: a short white bloom at the barrel so every shot has a
+  // visible origin, on top of the per-weapon signature below.
+  emitParticle(origin.x + Math.cos(shotAngle) * 14, origin.y + Math.sin(shotAngle) * 14, {
+    color: COLORS.white,
+    size: 8 + level * 0.5,
+    life: 70,
+    type: 'flash',
+    drag: 1,
+    glow: 1.4,
+  });
+  emitParticle(origin.x + Math.cos(shotAngle) * 12, origin.y + Math.sin(shotAngle) * 12, {
+    vx: Math.cos(shotAngle) * 5,
+    vy: Math.sin(shotAngle) * 5,
+    color: COLORS.white,
+    size: 13 + level,
+    life: 85,
+    type: 'trail',
+    drag: 0.84,
+    glow: 1.2,
+  });
+
   switch (weaponType) {
     case 'blaster': {
       const sp = particlePool.acquire();

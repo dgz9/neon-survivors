@@ -15,11 +15,38 @@ import {
   getProjectileCount,
   releaseXPOrb,
   getXPOrbCount,
+  getParticleCount,
+  updateParticles,
+  createMuzzleFlash,
+  setEventRecording,
+  drainEvents,
+  createPlayerHurtEffect,
+  recordEvent,
+  NetEventKind,
 } from '@/lib/gameEngine';
 import { FIXED_DT, createAccumulator, advanceAccumulator, AccumulatorState } from '@/lib/engine/timestep';
 import { Upgrade } from '@/types/game';
-import { sendInput, sendGameState, decodeGameState, MultiplayerMessage, MultiplayerPlayer } from '@/lib/multiplayer';
-import { playLevelUp, playDamage, playWaveComplete, setMuted, isMuted, startMatchMusic, stopMatchMusic } from '@/lib/audio';
+import {
+  sendInputCommands,
+  sendGameState,
+  sendPing,
+  sendPong,
+  decodeGameState,
+  MultiplayerMessage,
+  MultiplayerPlayer,
+} from '@/lib/multiplayer';
+import {
+  CommandBuffer,
+  CommandQueue,
+  ErrorSmoother,
+  LatencyTracker,
+  applyMoveCommand,
+  encodeCommand,
+  decodeCommand,
+  InputCommand,
+} from '@/lib/netcode';
+import { CoopGuestWorld } from '@/lib/coopGuestWorld';
+import { playLevelUp, playDamage, playWaveComplete, playExplosion, setMuted, isMuted, startMatchMusic, stopMatchMusic } from '@/lib/audio';
 import { CoopGameScene } from './three/CoopGameScene';
 import { CoopOverlay } from './three/CoopOverlay';
 import { TextParticles } from './three/TextParticles';
@@ -163,27 +190,27 @@ export default function CoopGame({
     mousePos: { x: 0, y: 0 },
     mouseDown: false,
   });
-  const remoteInputRef = useRef<{ keys: string[]; mousePos: Vector2 }>({
-    keys: [],
-    mousePos: { x: 0, y: 0 },
-  });
   const localPredictedProjectilesRef = useRef<LocalPredictedProjectile[]>([]);
   const localShotCooldownRef = useRef<Record<string, number>>({});
-  const targetStateRef = useRef<{
-    playerPos: Vector2 | null;
-    playerVel: Vector2 | null;
-    player2Pos: Vector2 | null;
-    player2Vel: Vector2 | null;
-    enemyPositions: Map<string, Vector2>;
-    lastSnapshotAt: number;
-  }>({
-    playerPos: null,
-    playerVel: null,
-    player2Pos: null,
-    player2Vel: null,
-    enemyPositions: new Map(),
-    lastSnapshotAt: 0,
+
+  // --- Netcode ---------------------------------------------------------------
+  /** Host: jitter-buffered queue of the guest's input commands. */
+  const commandQueueRef = useRef(new CommandQueue());
+  /** Guest: unacknowledged commands, replayed on every server correction. */
+  const commandBufferRef = useRef(new CommandBuffer());
+  /** Guest: interpolated view of everything the host owns. */
+  const guestWorldRef = useRef(new CoopGuestWorld());
+  /** Guest: dead-reckoned position of its own avatar, before error smoothing. */
+  const predictedP2Ref = useRef<{ position: Vector2; velocity: Vector2 }>({
+    position: { x: 0, y: 0 },
+    velocity: { x: 0, y: 0 },
   });
+  const errorSmootherRef = useRef(new ErrorSmoother());
+  const latencyRef = useRef(new LatencyTracker());
+  const pendingReconcileRef = useRef<{ position: Vector2; velocity: Vector2; ack: number } | null>(null);
+  const guestAccRef = useRef<AccumulatorState | null>(null);
+  const lastPingSentRef = useRef(0);
+  const [latencyMs, setLatencyMs] = useState<number | null>(null);
 
   const [isLoading, setIsLoading] = useState(true);
   const [isPaused, setIsPaused] = useState(false);
@@ -225,13 +252,19 @@ export default function CoopGame({
   const lastHealthRef = useRef<number>(100);
   const lastSyncRef = useRef<number>(0);
   const lastInputSendRef = useRef<number>(0);
+  const lastDisplayRef = useRef<number>(0);
   const guestUpgradeOptionsRef = useRef<Upgrade[]>([]);
   const gameOverSentRef = useRef(false);
   const gameOverHandledRef = useRef(false);
   const SYNC_INTERVAL = 40;
-  const INPUT_SEND_INTERVAL = 16;
+  /** Guest -> host input cadence. Each message resends recent commands so a
+   *  dropped packet never costs a frame of movement. */
+  const INPUT_SEND_INTERVAL = 33;
+  const PING_INTERVAL = 1000;
 
   const mobileScale = isTouchDevice ? 0.7 : 1;
+  const mobileScaleRef = useRef(mobileScale);
+  mobileScaleRef.current = mobileScale;
   const myPlayer = players.find(p => p.id === socket.id);
   const otherPlayer = players.find(p => p.id !== socket.id);
 
@@ -267,12 +300,15 @@ export default function CoopGame({
     );
   }, [onGameOver, players]);
 
-  const sendGuestInputNow = useCallback((force = false) => {
+  /** Ships recent unacknowledged commands to the host. */
+  const flushGuestInput = useCallback((now: number) => {
     if (isHost) return;
-    const now = performance.now();
-    if (!force && now - lastInputSendRef.current < INPUT_SEND_INTERVAL) return;
+    if (now - lastInputSendRef.current < INPUT_SEND_INTERVAL) return;
     lastInputSendRef.current = now;
-    sendInput(socket, Array.from(inputRef.current.keys), inputRef.current.mousePos);
+    // Redundant resend: three copies of each command means a single lost packet
+    // is invisible, which matters far more than the handful of bytes it costs.
+    const recent = commandBufferRef.current.recent(12);
+    if (recent.length > 0) sendInputCommands(socket, recent.map(encodeCommand));
   }, [isHost, socket]);
 
   // Handle resize
@@ -299,6 +335,13 @@ export default function CoopGame({
     setIsTouchDevice(hasTouch);
   }, []);
 
+  // Lock the document while a match is running so mobile browsers cannot
+  // pull-to-refresh, rubber-band, or pinch-zoom the arena out of frame.
+  useEffect(() => {
+    document.documentElement.classList.add('playing');
+    return () => document.documentElement.classList.remove('playing');
+  }, []);
+
   // Touch control callbacks
   const handleTouchMovement = useCallback((direction: { x: number; y: number }) => {
     touchMovementRef.current = direction;
@@ -316,9 +359,12 @@ export default function CoopGame({
   const initGame = useCallback(async () => {
     const dims = dimensionsRef.current;
     // Use effective dimensions (larger on mobile) so game fills the zoomed-out camera view
-    const effectiveWidth = Math.floor(dims.width / mobileScale);
-    const effectiveHeight = Math.floor(dims.height / mobileScale);
+    const scale = mobileScaleRef.current;
+    const effectiveWidth = Math.floor(dims.width / scale);
+    const effectiveHeight = Math.floor(dims.height / scale);
     if (!isHost) {
+      // Only the host records cosmetic events; the guest replays them.
+      setEventRecording(false);
       let state = createInitialGameState(
         otherPlayer?.imageUrl || '',
         effectiveWidth,
@@ -346,11 +392,18 @@ export default function CoopGame({
 
       state = startGame(state);
       gameStateRef.current = state;
+      guestWorldRef.current.reset();
+      commandBufferRef.current.clear();
+      errorSmootherRef.current.reset();
+      predictedP2Ref.current.position = { x: effectiveWidth / 2 + 50, y: effectiveHeight / 2 };
+      predictedP2Ref.current.velocity = { x: 0, y: 0 };
       setIsLoading(false);
       return;
     }
 
     setIsLoading(true);
+    setEventRecording(true);
+    commandQueueRef.current.reset();
 
     let state = createInitialGameState(
       myPlayer?.imageUrl || '',
@@ -412,7 +465,7 @@ export default function CoopGame({
     state = startGame(state);
     gameStateRef.current = state;
     setIsLoading(false);
-  }, [isHost, myPlayer, otherPlayer, arena, mobileScale]);
+  }, [isHost, myPlayer, otherPlayer, arena]);
 
   useEffect(() => {
     if (dimensionsRef.current.width > 0 && dimensionsRef.current.height > 0 && !gameInitializedRef.current) {
@@ -431,53 +484,19 @@ export default function CoopGame({
     return () => stopMatchMusic();
   }, [isLoading]);
 
-  // Pending state for guest init
-  const pendingGameStateRef = useRef<{
-    player: Player;
-    player2: Player | null;
-    score: number;
-    wave: number;
-    multiplier: number;
-    enemies: unknown[];
-    projectiles: unknown[];
-    powerups: unknown[];
-    experienceOrbs: unknown[];
-    particles?: unknown[];
-    isGameOver: boolean;
-    isRunning: boolean;
-  } | null>(null);
-
-  useEffect(() => {
-    if (!isHost && gameStateRef.current && pendingGameStateRef.current) {
-      const receivedState = pendingGameStateRef.current;
-      gameStateRef.current.player = receivedState.player;
-      gameStateRef.current.player.image = p1ImageRef.current;
-      gameStateRef.current.score = receivedState.score;
-      gameStateRef.current.wave = receivedState.wave;
-      gameStateRef.current.multiplier = receivedState.multiplier || 1;
-      gameStateRef.current.enemies = receivedState.enemies as typeof gameStateRef.current.enemies;
-      gameStateRef.current.projectiles = receivedState.projectiles as typeof gameStateRef.current.projectiles;
-      gameStateRef.current.projectileCount = (receivedState.projectiles as unknown[]).length;
-      gameStateRef.current.powerups = receivedState.powerups as typeof gameStateRef.current.powerups;
-      gameStateRef.current.experienceOrbs = receivedState.experienceOrbs as typeof gameStateRef.current.experienceOrbs;
-      gameStateRef.current.experienceOrbCount = (receivedState.experienceOrbs as unknown[]).length;
-      gameStateRef.current.particles = (receivedState.particles || []) as typeof gameStateRef.current.particles;
-      gameStateRef.current.isGameOver = receivedState.isGameOver;
-      gameStateRef.current.isRunning = receivedState.isRunning;
-      player2Ref.current = receivedState.player2 ? normalizeSyncedPlayer(receivedState.player2) : null;
-      if (player2Ref.current) player2Ref.current.image = p2ImageRef.current;
-      pendingGameStateRef.current = null;
-    }
-  }, [isLoading, isHost]);
-
   // Handle multiplayer messages
   useEffect(() => {
     const handleMessage = (event: MessageEvent) => {
       try {
         const data = JSON.parse(event.data) as MultiplayerMessage;
 
-        if (data.type === 'player-input' && isHost) {
-          remoteInputRef.current = { keys: data.keys, mousePos: data.mousePos };
+        if (data.type === 'input' && isHost) {
+          commandQueueRef.current.push(data.cmds.map(decodeCommand));
+        } else if (data.type === 'ping' && isHost) {
+          // Echo straight back so the guest can measure a true round trip.
+          sendPong(socket, data.t);
+        } else if (data.type === 'pong' && !isHost) {
+          latencyRef.current.sample(performance.now() - data.t);
         } else if (data.type === 'game-over' && !isHost) {
           if (gameStateRef.current) {
             gameStateRef.current.isGameOver = true;
@@ -488,92 +507,39 @@ export default function CoopGame({
           finishGameOver({ score: data.score, wave: data.wave, kills: data.kills, stats: data.stats });
           return;
         } else if (data.type === 'game-state' && !isHost) {
-          const receivedState = decodeGameState(data.state) as {
-            player: Player;
-            player2: Player | null;
-            score: number;
-            wave: number;
-            multiplier: number;
-            enemies: unknown[];
-            projectiles: unknown[];
-            powerups: unknown[];
-            experienceOrbs: unknown[];
-            particles?: unknown[];
-            isGameOver: boolean;
-            isRunning: boolean;
-          };
+          const snapshot = decodeGameState(data.state);
+          if (!snapshot) return;
 
-          if (receivedState.isGameOver) {
-            if (gameStateRef.current) {
-              gameStateRef.current.isGameOver = true;
-              gameStateRef.current.score = receivedState.score;
-              gameStateRef.current.wave = receivedState.wave;
-              gameStateRef.current.player.kills = receivedState.player?.kills || 0;
-              if (player2Ref.current) player2Ref.current.kills = receivedState.player2?.kills || 0;
-              gameStateRef.current.multiplier = receivedState.multiplier || 1;
-              gameStateRef.current.isRunning = false;
+          guestWorldRef.current.ingest(snapshot, performance.timeOrigin + performance.now());
+
+          if (snapshot.player2) {
+            // The snapshot's "player2" is this client's own avatar. Its stats
+            // are authoritative; its position feeds reconciliation rather than
+            // being applied directly, so local input stays lag-free.
+            const synced = normalizeSyncedPlayer(snapshot.player2 as unknown as Player);
+            if (player2Ref.current) {
+              synced.position = player2Ref.current.position;
+            } else {
+              synced.position = { ...snapshot.player2.position };
+              predictedP2Ref.current.position = { ...snapshot.player2.position };
             }
-            return;
+            synced.image = p2ImageRef.current;
+            player2Ref.current = synced;
+
+            pendingReconcileRef.current = {
+              position: { ...snapshot.player2.position },
+              velocity: { ...snapshot.player2.velocity },
+              ack: snapshot.ack,
+            };
           }
 
-          if (gameStateRef.current) {
-            targetStateRef.current.playerPos = { ...receivedState.player.position };
-            targetStateRef.current.playerVel = receivedState.player.velocity ? { ...receivedState.player.velocity } : null;
-            targetStateRef.current.player2Pos = receivedState.player2 ? { ...receivedState.player2.position } : null;
-            targetStateRef.current.player2Vel = receivedState.player2?.velocity ? { ...receivedState.player2.velocity } : null;
-            targetStateRef.current.lastSnapshotAt = performance.now();
-
-            targetStateRef.current.enemyPositions.clear();
-            for (const enemy of receivedState.enemies as typeof gameStateRef.current.enemies) {
-              targetStateRef.current.enemyPositions.set(enemy.id, { ...enemy.position });
-            }
-
-            const currentPlayerPos = gameStateRef.current.player.position;
-            gameStateRef.current.player = receivedState.player;
-            gameStateRef.current.player.position = currentPlayerPos;
-            gameStateRef.current.player.image = p1ImageRef.current;
-
-            gameStateRef.current.score = receivedState.score;
-            gameStateRef.current.wave = receivedState.wave;
-            gameStateRef.current.multiplier = receivedState.multiplier || 1;
-
-            const existingEnemyPositions = new Map(
-              gameStateRef.current.enemies.map(e => [e.id, { ...e.position }])
-            );
-            gameStateRef.current.enemies = (receivedState.enemies as typeof gameStateRef.current.enemies).map(e => {
-              const existingPos = existingEnemyPositions.get(e.id);
-              return { ...e, position: existingPos || e.position };
-            });
-
-            gameStateRef.current.projectiles = receivedState.projectiles as typeof gameStateRef.current.projectiles;
-            gameStateRef.current.projectileCount = (receivedState.projectiles as unknown[]).length;
-            gameStateRef.current.powerups = receivedState.powerups as typeof gameStateRef.current.powerups;
-            gameStateRef.current.experienceOrbs = receivedState.experienceOrbs as typeof gameStateRef.current.experienceOrbs;
-            gameStateRef.current.experienceOrbCount = (receivedState.experienceOrbs as unknown[]).length;
-
-            if (localPredictedProjectilesRef.current.length > 0) {
-              const authP2 = (receivedState.projectiles as Array<{ position: Vector2; isEnemy: boolean; color: string }>)
-                .filter(p => !p.isEnemy && p.color === PLAYER_COLORS[1]);
-              if (authP2.length > 0) {
-                localPredictedProjectilesRef.current = localPredictedProjectilesRef.current.filter(local =>
-                  !authP2.some(auth => Math.hypot(auth.position.x - local.position.x, auth.position.y - local.position.y) < 24)
-                );
-              }
-            }
-
-            gameStateRef.current.isGameOver = receivedState.isGameOver;
-            gameStateRef.current.isRunning = receivedState.isRunning;
-
-            if (receivedState.player2) {
-              const currentP2Pos = player2Ref.current?.position;
-              player2Ref.current = normalizeSyncedPlayer(receivedState.player2);
-              if (currentP2Pos) player2Ref.current.position = currentP2Pos;
-              player2Ref.current.image = p2ImageRef.current;
-            } else {
-              player2Ref.current = receivedState.player2;
-            }
-          } else {
-            pendingGameStateRef.current = receivedState;
+          if (snapshot.isGameOver && gameStateRef.current) {
+            gameStateRef.current.isGameOver = true;
+            gameStateRef.current.isRunning = false;
+            gameStateRef.current.score = snapshot.score;
+            gameStateRef.current.wave = snapshot.wave;
+            gameStateRef.current.player.kills = snapshot.player.kills;
+            if (player2Ref.current) player2Ref.current.kills = snapshot.player2?.kills || 0;
           }
         }
 
@@ -614,24 +580,23 @@ export default function CoopGame({
     const handleKeyDown = (e: KeyboardEvent) => {
       const key = e.key.toLowerCase();
       inputRef.current.keys.add(key);
-      sendGuestInputNow(true);
       if (key === 'escape') setIsPaused(p => !p);
     };
 
     const handleKeyUp = (e: KeyboardEvent) => {
       inputRef.current.keys.delete(e.key.toLowerCase());
-      sendGuestInputNow(true);
     };
 
     const handleMouseMove = (e: MouseEvent) => {
       const el = gameAreaRef.current;
       if (el) {
         const rect = el.getBoundingClientRect();
+        // Convert to world coordinates — the canvas is zoomed out on mobile.
+        const scale = mobileScaleRef.current;
         inputRef.current.mousePos = {
-          x: e.clientX - rect.left,
-          y: e.clientY - rect.top,
+          x: (e.clientX - rect.left) / scale,
+          y: (e.clientY - rect.top) / scale,
         };
-        sendGuestInputNow(false);
       }
     };
 
@@ -666,7 +631,7 @@ export default function CoopGame({
       window.removeEventListener('gamepadconnected', handleGamepadConnected);
       window.removeEventListener('gamepaddisconnected', handleGamepadDisconnected);
     };
-  }, [sendGuestInputNow]);
+  }, []);
 
   const resolveUpgradeRound = useCallback((p1UpgradeId: string, p2UpgradeId: string) => {
     if (!isHost || !gameStateRef.current) return;
@@ -724,105 +689,82 @@ export default function CoopGame({
     }
   }, [isHost, myUpgradeChoice, otherUpgradeChoice, waitingForOther, resolveUpgradeRound]);
 
+  // Shared display-state publisher — runs for host *and* guest. The guest used
+  // to get no HUD at all because this only lived inside the host branch.
+  const publishDisplayState = useCallback(() => {
+    const gs = gameStateRef.current;
+    if (!gs) return;
+    setDisplayState({
+      score: gs.score,
+      wave: gs.wave,
+      health: gs.player.health,
+      maxHealth: gs.player.maxHealth,
+      health2: player2Ref.current?.health || 0,
+      maxHealth2: player2Ref.current?.maxHealth || 100,
+      level: gs.player.level,
+      experience: gs.player.experience,
+      experienceToLevel: DEFAULT_CONFIG.experienceToLevel * gs.player.level,
+      multiplier: gs.multiplier,
+      killStreak: gs.killStreak,
+      nearMissCount: gs.nearMissCount,
+      activeEvent: gs.activeEvent,
+      eventAnnounceTime: gs.eventAnnounceTime,
+      // The HUD belongs to whoever is holding this device, not to P1.
+      weapons: (isHost ? gs.player : player2Ref.current ?? gs.player).weapons
+        .map(w => ({ type: w.type, level: w.level })),
+      waveAnnounceTime: gs.waveAnnounceTime,
+      gameTime: gs.gameTime,
+    });
+  }, [isHost]);
+
   // Game loop — logic only, no rendering
   useEffect(() => {
     if (isLoading) return;
 
     const gameLoop = (timestamp: number) => {
-      const deltaTime = Math.min((timestamp - lastTimeRef.current) / 16.67, 3);
+      const frameDelta = Math.min((timestamp - lastTimeRef.current) / 16.67, 3);
       lastTimeRef.current = timestamp;
       const dims = dimensionsRef.current;
-      const effectiveWidth = Math.floor(dims.width / mobileScale);
-      const effectiveHeight = Math.floor(dims.height / mobileScale);
+      const scale = mobileScaleRef.current;
+      const effectiveWidth = Math.floor(dims.width / scale);
+      const effectiveHeight = Math.floor(dims.height / scale);
+      const nowMs = Date.now();
 
-      // Initialize accumulator on first frame (for host fixed timestep)
-      if (!accRef.current) {
-        accRef.current = createAccumulator(timestamp);
-      }
+      if (!accRef.current) accRef.current = createAccumulator(timestamp);
+      if (!guestAccRef.current) guestAccRef.current = createAccumulator(timestamp);
 
-      // Poll touch input
-      if (isTouchDevice && gameStateRef.current) {
-        // Pass analog movement directly for smooth proportional control
-        inputRef.current.touchMovement = touchMovementRef.current;
+      // The avatar this client actually drives.
+      const localPlayer = isHost ? gameStateRef.current?.player : player2Ref.current;
 
-        // Also map to WASD keys for co-op remote input sync
+      // ---------------------------------------------------------------- input
+      let moveX = 0;
+      let moveY = 0;
+
+      if (isTouchDevice) {
+        // Analog stick straight through — no 8-way key quantisation.
         const tm = touchMovementRef.current;
-        if (tm.y < -0.15) inputRef.current.keys.add('w');
-        else inputRef.current.keys.delete('w');
-        if (tm.y > 0.15) inputRef.current.keys.add('s');
-        else inputRef.current.keys.delete('s');
-        if (tm.x < -0.15) inputRef.current.keys.add('a');
-        else inputRef.current.keys.delete('a');
-        if (tm.x > 0.15) inputRef.current.keys.add('d');
-        else inputRef.current.keys.delete('d');
-
-        // Touch aim: offset from player position using right joystick
-        const ta = touchAimRef.current;
-        const aimPlayer = isHost ? gameStateRef.current?.player : player2Ref.current;
-        if (ta && aimPlayer) {
-          inputRef.current.mousePos = {
-            x: aimPlayer.position.x + ta.x,
-            y: aimPlayer.position.y + ta.y,
-          };
-        } else if (aimPlayer) {
-          // Auto-aim at nearest enemy when right joystick is not active
-          const enemies = gameStateRef.current.enemies;
-          let nearestDist = Infinity;
-          let nearestPos: Vector2 | null = null;
-          for (let i = 0; i < enemies.length; i++) {
-            const e = enemies[i];
-            const dx = e.position.x - aimPlayer.position.x;
-            const dy = e.position.y - aimPlayer.position.y;
-            const dist = dx * dx + dy * dy;
-            if (dist < nearestDist) {
-              nearestDist = dist;
-              nearestPos = e.position;
-            }
-          }
-          if (nearestPos) {
-            inputRef.current.mousePos = { x: nearestPos.x, y: nearestPos.y };
-          } else {
-            inputRef.current.mousePos = {
-              x: aimPlayer.position.x + 200,
-              y: aimPlayer.position.y,
-            };
-          }
-        }
-
-        sendGuestInputNow(false);
-      } else {
-        inputRef.current.touchMovement = undefined;
+        moveX = tm.x;
+        moveY = tm.y;
       }
 
-      // Poll gamepad input
       if (gamepadIndexRef.current !== null) {
         const gamepad = navigator.getGamepads()[gamepadIndexRef.current];
         if (gamepad) {
           const deadzone = 0.15;
           const lx = Math.abs(gamepad.axes[0]) > deadzone ? gamepad.axes[0] : 0;
           const ly = Math.abs(gamepad.axes[1]) > deadzone ? gamepad.axes[1] : 0;
-
-          if (ly < -0.3) inputRef.current.keys.add('w');
-          else inputRef.current.keys.delete('w');
-          if (ly > 0.3) inputRef.current.keys.add('s');
-          else inputRef.current.keys.delete('s');
-          if (lx < -0.3) inputRef.current.keys.add('a');
-          else inputRef.current.keys.delete('a');
-          if (lx > 0.3) inputRef.current.keys.add('d');
-          else inputRef.current.keys.delete('d');
+          if (lx !== 0 || ly !== 0) {
+            moveX = lx;
+            moveY = ly;
+          }
 
           const rx = Math.abs(gamepad.axes[2]) > deadzone ? gamepad.axes[2] : 0;
           const ry = Math.abs(gamepad.axes[3]) > deadzone ? gamepad.axes[3] : 0;
-
-          if (Math.abs(rx) > deadzone || Math.abs(ry) > deadzone) {
-            const aimDistance = 200;
-            const aimPlayer = isHost ? gameStateRef.current?.player : player2Ref.current;
-            if (aimPlayer) {
-              inputRef.current.mousePos = {
-                x: aimPlayer.position.x + rx * aimDistance,
-                y: aimPlayer.position.y + ry * aimDistance,
-              };
-            }
+          if ((rx !== 0 || ry !== 0) && localPlayer) {
+            inputRef.current.mousePos = {
+              x: localPlayer.position.x + rx * 200,
+              y: localPlayer.position.y + ry * 200,
+            };
           }
 
           if (gamepad.buttons[9]?.pressed && timestamp - lastPausePress.current > 300) {
@@ -832,352 +774,124 @@ export default function CoopGame({
         }
       }
 
-      if (!isHost && timestamp - lastInputSendRef.current > INPUT_SEND_INTERVAL) {
-        sendGuestInputNow(false);
-      }
-
-      // Guest: interpolate + local prediction
-      if (!isHost && gameStateRef.current && gameStateRef.current.isRunning) {
-        const remoteLerpFactor = 0.4;
-        const msSinceSnapshot = targetStateRef.current.lastSnapshotAt > 0
-          ? Math.min(120, timestamp - targetStateRef.current.lastSnapshotAt) : 0;
-        const predictionFrames = (msSinceSnapshot + SYNC_INTERVAL * 0.5) / 16.67;
-
-        if (targetStateRef.current.playerPos && gameStateRef.current.player) {
-          const baseTarget = targetStateRef.current.playerPos;
-          const vel = targetStateRef.current.playerVel;
-          const target = vel
-            ? { x: baseTarget.x + vel.x * predictionFrames, y: baseTarget.y + vel.y * predictionFrames }
-            : baseTarget;
-          gameStateRef.current.player.position.x += (target.x - gameStateRef.current.player.position.x) * remoteLerpFactor;
-          gameStateRef.current.player.position.y += (target.y - gameStateRef.current.player.position.y) * remoteLerpFactor;
-        }
-
-        if (player2Ref.current) {
-          const p2 = recalculatePlayerStats(player2Ref.current, Date.now());
-          player2Ref.current = p2;
-
-          let dx = 0, dy = 0;
-          if (inputRef.current.keys.has('w') || inputRef.current.keys.has('arrowup')) dy -= 1;
-          if (inputRef.current.keys.has('s') || inputRef.current.keys.has('arrowdown')) dy += 1;
-          if (inputRef.current.keys.has('a') || inputRef.current.keys.has('arrowleft')) dx -= 1;
-          if (inputRef.current.keys.has('d') || inputRef.current.keys.has('arrowright')) dx += 1;
-
-          if (dx !== 0 || dy !== 0) { const len = Math.hypot(dx, dy); dx /= len; dy /= len; }
-
-          p2.velocity.x = dx * p2.speed;
-          p2.velocity.y = dy * p2.speed;
-          p2.position.x += p2.velocity.x * deltaTime;
-          p2.position.y += p2.velocity.y * deltaTime;
-          p2.position.x = Math.max(p2.radius, Math.min(effectiveWidth - p2.radius, p2.position.x));
-          p2.position.y = Math.max(p2.radius, Math.min(effectiveHeight - p2.radius, p2.position.y));
-
-          if (targetStateRef.current.player2Pos) {
-            const baseTarget = targetStateRef.current.player2Pos;
-            const vel = targetStateRef.current.player2Vel;
-            const target = vel
-              ? { x: baseTarget.x + vel.x * predictionFrames, y: baseTarget.y + vel.y * predictionFrames }
-              : baseTarget;
-            const errorX = target.x - p2.position.x;
-            const errorY = target.y - p2.position.y;
-            const errorDistance = Math.hypot(errorX, errorY);
-
-            if (errorDistance > 12) {
-              const correctionFactor = errorDistance > 48 ? 0.32 : 0.18;
-              const maxCorrection = errorDistance > 48 ? 14 : 6;
-              const stepX = errorX * correctionFactor;
-              const stepY = errorY * correctionFactor;
-              const stepLen = Math.hypot(stepX, stepY);
-              if (stepLen > maxCorrection && stepLen > 0) {
-                const scale = maxCorrection / stepLen;
-                p2.position.x += stepX * scale;
-                p2.position.y += stepY * scale;
-              } else {
-                p2.position.x += stepX;
-                p2.position.y += stepY;
-              }
-            }
-          }
-        }
-
-        // Guest local shot prediction
-        if (player2Ref.current && !isPaused && !showUpgrades) {
-          const p2 = player2Ref.current;
-          const mousePos = inputRef.current.mousePos;
-          const nowMs = Date.now();
-
-          p2.weapons.forEach((weapon, weaponIndex) => {
-            const cooldownKey = `${weapon.type}-${weaponIndex}`;
-            const lastShotAt = localShotCooldownRef.current[cooldownKey] || 0;
-            if (nowMs - lastShotAt < weapon.fireRate) return;
-
-            const angle = Math.atan2(mousePos.y - p2.position.y, mousePos.x - p2.position.x);
-            const projectileCount = weapon.projectileCount || 1;
-
-            for (let i = 0; i < projectileCount; i++) {
-              let projectileAngle = angle;
-              if (projectileCount > 1) {
-                const spread = weapon.type === 'spread' ? Math.PI / 3 : Math.PI / 6;
-                projectileAngle = angle - spread / 2 + (spread * i / (projectileCount - 1));
-              }
-
-              localPredictedProjectilesRef.current.push({
-                id: `local-p2-${nowMs}-${Math.random()}-${i}`,
-                position: { ...p2.position },
-                velocity: {
-                  x: Math.cos(projectileAngle) * weapon.projectileSpeed,
-                  y: Math.sin(projectileAngle) * weapon.projectileSpeed,
-                },
-                radius: 6,
-                color: PLAYER_COLORS[1],
-                lifeMs: 140,
-                maxLifeMs: 140,
-              });
-            }
-            localShotCooldownRef.current[cooldownKey] = nowMs;
-          });
-        }
-
-        if (localPredictedProjectilesRef.current.length > 0) {
-          const frameMs = deltaTime * 16.67;
-          localPredictedProjectilesRef.current = localPredictedProjectilesRef.current
-            .map(proj => ({
-              ...proj,
-              position: {
-                x: proj.position.x + proj.velocity.x * deltaTime,
-                y: proj.position.y + proj.velocity.y * deltaTime,
-              },
-              lifeMs: proj.lifeMs - frameMs,
-            }))
-            .filter(proj =>
-              proj.lifeMs > 0 &&
-              proj.position.x >= -20 && proj.position.x <= effectiveWidth + 20 &&
-              proj.position.y >= -20 && proj.position.y <= effectiveHeight + 20
-            );
-        }
-
-        // Lerp enemy positions
-        for (const enemy of gameStateRef.current.enemies) {
-          const targetPos = targetStateRef.current.enemyPositions.get(enemy.id);
-          if (targetPos) {
-            enemy.position.x += (targetPos.x - enemy.position.x) * remoteLerpFactor;
-            enemy.position.y += (targetPos.y - enemy.position.y) * remoteLerpFactor;
-          }
+      if (moveX === 0 && moveY === 0) {
+        // Keyboard fallback.
+        if (inputRef.current.keys.has('w') || inputRef.current.keys.has('arrowup')) moveY -= 1;
+        if (inputRef.current.keys.has('s') || inputRef.current.keys.has('arrowdown')) moveY += 1;
+        if (inputRef.current.keys.has('a') || inputRef.current.keys.has('arrowleft')) moveX -= 1;
+        if (inputRef.current.keys.has('d') || inputRef.current.keys.has('arrowright')) moveX += 1;
+        const len = Math.hypot(moveX, moveY);
+        if (len > 1) {
+          moveX /= len;
+          moveY /= len;
         }
       }
 
-      // Host: update game state with fixed timestep
-      if (isHost && gameStateRef.current && !isPaused && !showUpgrades && gameStateRef.current.isRunning) {
-        const gs = gameStateRef.current;
-        const nowMs = Date.now();
-        const slowMoFactor = (gs.slowMoUntil && nowMs < gs.slowMoUntil)
-          ? (gs.slowMoFactor || 0.3) : 1;
+      // Feed the shared movement path used by the single-player engine.
+      inputRef.current.touchMovement = (moveX !== 0 || moveY !== 0) ? { x: moveX, y: moveY } : undefined;
 
-        const { acc: newAcc, tickCount } = advanceAccumulator(accRef.current!, timestamp, slowMoFactor);
-        accRef.current = newAcc;
-
-        for (let ti = 0; ti < tickCount; ti++) {
-          gameStateRef.current = updateGameState(
-            gameStateRef.current,
-            FIXED_DT,
-            effectiveWidth,
-            effectiveHeight,
-            inputRef.current,
-            DEFAULT_CONFIG,
-            player2Ref.current
-          );
-          if (gameStateRef.current.isGameOver) break;
-        }
-
-        // Update player 2 with remote input
-        if (player2Ref.current) {
-          player2Ref.current = recalculatePlayerStats(player2Ref.current, Date.now());
-          const p2 = player2Ref.current;
-          const remoteInput = remoteInputRef.current;
-
-          let dx = 0, dy = 0;
-          if (remoteInput.keys.includes('w') || remoteInput.keys.includes('arrowup')) dy -= 1;
-          if (remoteInput.keys.includes('s') || remoteInput.keys.includes('arrowdown')) dy += 1;
-          if (remoteInput.keys.includes('a') || remoteInput.keys.includes('arrowleft')) dx -= 1;
-          if (remoteInput.keys.includes('d') || remoteInput.keys.includes('arrowright')) dx += 1;
-
-          if (dx !== 0 || dy !== 0) { const len = Math.sqrt(dx * dx + dy * dy); dx /= len; dy /= len; }
-
-          p2.velocity.x = dx * p2.speed;
-          p2.velocity.y = dy * p2.speed;
-          p2.position.x += p2.velocity.x * deltaTime;
-          p2.position.y += p2.velocity.y * deltaTime;
-          p2.position.x = Math.max(p2.radius, Math.min(effectiveWidth - p2.radius, p2.position.x));
-          p2.position.y = Math.max(p2.radius, Math.min(effectiveHeight - p2.radius, p2.position.y));
-
-          // P2 fires
-          const now = Date.now();
-          for (const weapon of p2.weapons) {
-            if (now - weapon.lastFired >= weapon.fireRate) {
-              const mousePos = remoteInput.mousePos;
-              const angle = Math.atan2(mousePos.y - p2.position.y, mousePos.x - p2.position.x);
-              const projectileCount = weapon.projectileCount || 1;
-
-              for (let i = 0; i < projectileCount; i++) {
-                let projectileAngle = angle;
-                if (projectileCount > 1) {
-                  const spread = weapon.type === 'spread' ? Math.PI / 3 : Math.PI / 6;
-                  projectileAngle = angle - spread / 2 + (spread * i / (projectileCount - 1));
-                }
-
-                const proj = acquireProjectile();
-                proj.id = `p2-proj-${now}-${Math.random()}-${i}`;
-                proj.position.x = p2.position.x;
-                proj.position.y = p2.position.y;
-                proj.velocity.x = Math.cos(projectileAngle) * weapon.projectileSpeed;
-                proj.velocity.y = Math.sin(projectileAngle) * weapon.projectileSpeed;
-                proj.radius = 6;
-                proj.color = PLAYER_COLORS[1];
-                proj.damage = weapon.damage;
-                proj.isEnemy = false;
-                proj.piercing = weapon.piercing || 0;
-                proj.hitEnemies.clear();
-              }
-              weapon.lastFired = now;
-            }
-          }
-
-          // P2 collision with enemies
-          for (const enemy of gameStateRef.current.enemies) {
-            const dist = Math.hypot(enemy.position.x - p2.position.x, enemy.position.y - p2.position.y);
-            if (dist < enemy.radius + p2.radius && now > p2.invulnerableUntil) {
-              p2.health -= enemy.damage;
-              p2.invulnerableUntil = now + 500;
-              gameStateRef.current.totalDamageTaken += enemy.damage;
-              playDamage();
-            }
-          }
-
-          // P2 collects XP orbs
-          const magnetRange = 100 * p2.magnetMultiplier;
-          const orbCount = getXPOrbCount();
-          for (let i = orbCount - 1; i >= 0; i--) {
-            const orb = gameStateRef.current.experienceOrbs[i];
-            const dist = Math.hypot(orb.position.x - p2.position.x, orb.position.y - p2.position.y);
-            if (dist < magnetRange) {
-              const pullStrength = 0.1 * (1 - dist / magnetRange);
-              orb.position.x += (p2.position.x - orb.position.x) * pullStrength;
-              orb.position.y += (p2.position.y - orb.position.y) * pullStrength;
-            }
-            if (dist < p2.radius + 8) {
-              gameStateRef.current.player.experience += orb.value;
-              releaseXPOrb(orb);
-            }
-          }
-
-          gameStateRef.current.projectileCount = getProjectileCount();
-          gameStateRef.current.experienceOrbCount = getXPOrbCount();
-        }
-
-        // Check co-op game over
-        const p1Dead = gameStateRef.current.player.health <= 0;
-        const p2Dead = !!player2Ref.current && player2Ref.current.health <= 0;
-        if (p1Dead && p2Dead) gameStateRef.current.isGameOver = true;
-
-        // Sync state to guest
-        if (timestamp - lastSyncRef.current > SYNC_INTERVAL) {
-          lastSyncRef.current = timestamp;
-
-          const prunedEnemies = gameStateRef.current.enemies.map(e => ({
-            id: e.id, position: e.position, health: e.health, maxHealth: e.maxHealth,
-            type: e.type, radius: e.radius, damage: e.damage, color: e.color, ghostAlpha: e.ghostAlpha,
-          }));
-
-          const prunedProjectiles = [];
-          const prCount = getProjectileCount();
-          for (let pi = 0; pi < prCount; pi++) {
-            const p = gameStateRef.current.projectiles[pi];
-            prunedProjectiles.push({
-              id: p.id, position: p.position, velocity: p.velocity, damage: p.damage,
-              radius: p.radius, color: p.color, isEnemy: p.isEnemy, piercing: p.piercing,
-            });
-          }
-
-          const prunedOrbs = [];
-          const xpCount = getXPOrbCount();
-          for (let oi = 0; oi < xpCount; oi++) {
-            const o = gameStateRef.current.experienceOrbs[oi];
-            prunedOrbs.push({ id: o.id, position: o.position, value: o.value });
-          }
-
-          const prunedPlayer = {
-            position: gameStateRef.current.player.position,
-            velocity: gameStateRef.current.player.velocity,
-            health: gameStateRef.current.player.health,
-            maxHealth: gameStateRef.current.player.maxHealth,
-            radius: gameStateRef.current.player.radius,
-            color: gameStateRef.current.player.color,
-            invulnerableUntil: gameStateRef.current.player.invulnerableUntil,
-            level: gameStateRef.current.player.level,
-            experience: gameStateRef.current.player.experience,
-            kills: gameStateRef.current.player.kills,
-            weapons: gameStateRef.current.player.weapons.map(w => ({ type: w.type, level: w.level })),
-            speed: gameStateRef.current.player.speed,
-            baseSpeed: gameStateRef.current.player.baseSpeed,
-            speedBonus: gameStateRef.current.player.speedBonus,
-            magnetMultiplier: gameStateRef.current.player.magnetMultiplier,
-            magnetBonus: gameStateRef.current.player.magnetBonus,
-            activeBuffs: gameStateRef.current.player.activeBuffs,
+      // Aim: right stick > touch aim stick > mouse > nearest enemy.
+      if (isTouchDevice && localPlayer) {
+        const ta = touchAimRef.current;
+        if (ta) {
+          inputRef.current.mousePos = {
+            x: localPlayer.position.x + ta.x,
+            y: localPlayer.position.y + ta.y,
           };
-
-          const prunedPlayer2 = player2Ref.current ? {
-            position: player2Ref.current.position,
-            velocity: player2Ref.current.velocity,
-            health: player2Ref.current.health,
-            maxHealth: player2Ref.current.maxHealth,
-            radius: player2Ref.current.radius,
-            color: player2Ref.current.color,
-            invulnerableUntil: player2Ref.current.invulnerableUntil,
-            level: player2Ref.current.level,
-            kills: player2Ref.current.kills,
-            weapons: player2Ref.current.weapons.map(w => ({
-              type: w.type, level: w.level, damage: w.damage, fireRate: w.fireRate,
-              projectileSpeed: w.projectileSpeed, projectileCount: w.projectileCount,
-              piercing: w.piercing, lastFired: w.lastFired,
-            })),
-            speed: player2Ref.current.speed,
-            baseSpeed: player2Ref.current.baseSpeed,
-            speedBonus: player2Ref.current.speedBonus,
-            magnetMultiplier: player2Ref.current.magnetMultiplier,
-            magnetBonus: player2Ref.current.magnetBonus,
-            activeBuffs: player2Ref.current.activeBuffs,
-          } : null;
-
-          sendGameState(socket, {
-            player: prunedPlayer, player2: prunedPlayer2,
-            score: gameStateRef.current.score, wave: gameStateRef.current.wave,
-            multiplier: gameStateRef.current.multiplier, enemies: prunedEnemies,
-            projectiles: prunedProjectiles, powerups: gameStateRef.current.powerups,
-            experienceOrbs: prunedOrbs, isGameOver: gameStateRef.current.isGameOver,
-            isRunning: gameStateRef.current.isRunning,
-          });
+        } else {
+          const enemies = gameStateRef.current?.enemies || [];
+          let nearestDistSq = Infinity;
+          let nearestPos: Vector2 | null = null;
+          for (let i = 0; i < enemies.length; i++) {
+            const e = enemies[i];
+            const dx = e.position.x - localPlayer.position.x;
+            const dy = e.position.y - localPlayer.position.y;
+            const d = dx * dx + dy * dy;
+            if (d < nearestDistSq) {
+              nearestDistSq = d;
+              nearestPos = e.position;
+            }
+          }
+          if (nearestPos) {
+            inputRef.current.mousePos = { x: nearestPos.x, y: nearestPos.y };
+          } else if (moveX !== 0 || moveY !== 0) {
+            inputRef.current.mousePos = {
+              x: localPlayer.position.x + moveX * 200,
+              y: localPlayer.position.y + moveY * 200,
+            };
+          } else {
+            inputRef.current.mousePos = {
+              x: localPlayer.position.x + 200,
+              y: localPlayer.position.y,
+            };
+          }
         }
+      }
 
-        // Update display state
-        if (Math.floor(timestamp) % 100 < 17) {
+      const canAct = !isPaused && !showUpgrades;
+
+      // ------------------------------------------------------------ host path
+      if (isHost && gameStateRef.current) {
+        const simulating = canAct && gameStateRef.current.isRunning;
+
+        if (simulating) {
           const gs = gameStateRef.current;
-          setDisplayState({
-            score: gs.score, wave: gs.wave,
-            health: gs.player.health, maxHealth: gs.player.maxHealth,
-            health2: player2Ref.current?.health || 0, maxHealth2: player2Ref.current?.maxHealth || 100,
-            level: gs.player.level, experience: gs.player.experience,
-            experienceToLevel: DEFAULT_CONFIG.experienceToLevel * gs.player.level,
-            multiplier: gs.multiplier,
-            killStreak: gs.killStreak,
-            nearMissCount: gs.nearMissCount,
-            activeEvent: gs.activeEvent,
-            eventAnnounceTime: gs.eventAnnounceTime,
-            weapons: gs.player.weapons.map(w => ({ type: w.type, level: w.level })),
-            waveAnnounceTime: gs.waveAnnounceTime, gameTime: gs.gameTime,
-          });
+          const slowMoFactor = (gs.slowMoUntil && nowMs < gs.slowMoUntil)
+            ? (gs.slowMoFactor || 0.3) : 1;
+
+          const { acc: newAcc, tickCount } = advanceAccumulator(accRef.current, timestamp, slowMoFactor);
+          accRef.current = newAcc;
+
+          for (let ti = 0; ti < tickCount; ti++) {
+            gameStateRef.current = updateGameState(
+              gameStateRef.current,
+              FIXED_DT,
+              effectiveWidth,
+              effectiveHeight,
+              inputRef.current,
+              DEFAULT_CONFIG,
+              player2Ref.current
+            );
+
+            // P2 advances inside the same fixed tick as everything else. It used
+            // to run once per rendered frame with a wall-clock delta, which made
+            // the second player's movement frame-rate dependent and produced
+            // jittery snapshots for the guest to interpolate.
+            if (player2Ref.current) {
+              simulateRemotePlayerTick(effectiveWidth, effectiveHeight);
+            }
+
+            if (gameStateRef.current.isGameOver) break;
+          }
+
+          // Co-op game over: both down.
+          const p1Dead = gameStateRef.current.player.health <= 0;
+          const p2Dead = !!player2Ref.current && player2Ref.current.health <= 0;
+          if (p1Dead && p2Dead) gameStateRef.current.isGameOver = true;
+        } else {
+          // Re-anchor the accumulator so resuming does not fire a burst of
+          // catch-up ticks for the time spent paused.
+          accRef.current = createAccumulator(timestamp);
         }
 
-        // Check for pending level ups
+        // ---- snapshot ----
+        // Sent even while paused: the guest needs a continuing snapshot stream
+        // to keep its interpolation clock alive and to receive input acks,
+        // otherwise the world visibly drifts and then freezes on its side.
+        if (timestamp - lastSyncRef.current >= SYNC_INTERVAL) {
+          // Advance on a fixed grid so the cadence stays steady instead of
+          // drifting with frame times; resync if we fell far behind.
+          lastSyncRef.current += SYNC_INTERVAL;
+          if (timestamp - lastSyncRef.current > SYNC_INTERVAL * 4) lastSyncRef.current = timestamp;
+          sendSnapshot(timestamp);
+        }
+
+        if (timestamp - lastDisplayRef.current > 100) {
+          lastDisplayRef.current = timestamp;
+          publishDisplayState();
+        }
+
+        // Level ups
         if (gameStateRef.current.pendingLevelUps > 0 && !showUpgrades) {
           const hostUpgrades = gameStateRef.current.availableUpgrades;
           const guestUpgrades = player2Ref.current ? generateUpgrades(player2Ref.current) : hostUpgrades;
@@ -1196,8 +910,136 @@ export default function CoopGame({
           lastWaveRef.current = gameStateRef.current.wave;
           playWaveComplete();
         }
-        if (gameStateRef.current.player.health < lastHealthRef.current) playDamage();
+        if (gameStateRef.current.player.health < lastHealthRef.current) {
+          playDamage();
+          if (typeof navigator !== 'undefined' && navigator.vibrate) navigator.vibrate(30);
+        }
         lastHealthRef.current = gameStateRef.current.player.health;
+      }
+
+      // ----------------------------------------------------------- guest path
+      if (!isHost && gameStateRef.current) {
+        const world = guestWorldRef.current;
+        const localNow = performance.timeOrigin + timestamp;
+
+        // --- own avatar: predict, then reconcile ---
+        if (player2Ref.current && gameStateRef.current.isRunning) {
+          player2Ref.current = recalculatePlayerStats(player2Ref.current, nowMs);
+          const p2 = player2Ref.current;
+          const bounds = { width: effectiveWidth, height: effectiveHeight, radius: p2.radius };
+          const predicted = predictedP2Ref.current;
+
+          const reconcile = pendingReconcileRef.current;
+          if (reconcile) {
+            pendingReconcileRef.current = null;
+            const beforeX = predicted.position.x;
+            const beforeY = predicted.position.y;
+
+            // Rewind to the host's authoritative result, then replay every
+            // command it hasn't seen yet. Local input therefore stays
+            // instantaneous while still converging on the server's truth.
+            commandBufferRef.current.acknowledge(reconcile.ack);
+            predicted.position.x = reconcile.position.x;
+            predicted.position.y = reconcile.position.y;
+            predicted.velocity.x = reconcile.velocity.x;
+            predicted.velocity.y = reconcile.velocity.y;
+
+            for (const cmd of commandBufferRef.current.unacknowledged) {
+              applyMoveCommand(predicted.position, predicted.velocity, cmd, p2.speed, bounds, FIXED_DT);
+            }
+
+            // Fold the correction into a decaying visual offset instead of
+            // teleporting the avatar.
+            errorSmootherRef.current.absorb(
+              beforeX - predicted.position.x,
+              beforeY - predicted.position.y,
+            );
+          }
+
+          const aim = Math.atan2(
+            inputRef.current.mousePos.y - predicted.position.y,
+            inputRef.current.mousePos.x - predicted.position.x,
+          );
+
+          const { acc: gAcc, tickCount: gTicks } = advanceAccumulator(guestAccRef.current, timestamp, 1);
+          guestAccRef.current = gAcc;
+
+          // Commands are produced even while paused, but zeroed. Skipping them
+          // entirely would leave the host's queue empty, and an empty queue
+          // holds the last input — the guest would keep sliding on the host's
+          // side for as long as the overlay was up.
+          for (let ti = 0; ti < gTicks; ti++) {
+            const cmd = canAct
+              ? commandBufferRef.current.create(moveX, moveY, aim)
+              : commandBufferRef.current.create(0, 0, aim);
+            applyMoveCommand(predicted.position, predicted.velocity, cmd, p2.speed, bounds, FIXED_DT);
+          }
+
+          errorSmootherRef.current.decay(frameDelta);
+          p2.position.x = predicted.position.x + errorSmootherRef.current.x;
+          p2.position.y = predicted.position.y + errorSmootherRef.current.y;
+          p2.velocity.x = predicted.velocity.x;
+          p2.velocity.y = predicted.velocity.y;
+
+          if (canAct) predictLocalShots(p2, effectiveWidth, effectiveHeight);
+        }
+
+        flushGuestInput(timestamp);
+
+        if (timestamp - lastPingSentRef.current > PING_INTERVAL) {
+          lastPingSentRef.current = timestamp;
+          sendPing(socket, performance.now());
+          setLatencyMs(Math.round(latencyRef.current.rttMs));
+        }
+
+        // --- remote world: render on the delayed, interpolated timeline ---
+        const renderTime = world.renderTime(localNow);
+        world.replayDueEvents(renderTime, {
+          onEnemyHit: (id) => world.flashEnemy(id, nowMs),
+          onKill: (_x, _y, radius, isBoss) => {
+            if (isBoss || radius >= 22) playExplosion();
+          },
+          onPlayerHurt: (heavy, isLocal) => {
+            playDamage();
+            if (!gameStateRef.current) return;
+            // Both players' hits are audible — that is useful co-op awareness —
+            // but only your own shakes the screen and buzzes the device.
+            if (isLocal) {
+              gameStateRef.current.screenFlash = nowMs;
+              gameStateRef.current.screenFlashColor = '255, 45, 106';
+              gameStateRef.current.screenShake = Math.max(gameStateRef.current.screenShake, heavy ? 26 : 14);
+              if (typeof navigator !== 'undefined' && navigator.vibrate) navigator.vibrate(heavy ? 35 : 18);
+            }
+          },
+          onBlast: () => {
+            if (gameStateRef.current) {
+              gameStateRef.current.screenFlash = nowMs;
+              gameStateRef.current.screenFlashColor = '255, 170, 45';
+            }
+          },
+        });
+        world.sample(renderTime, gameStateRef.current);
+        gameStateRef.current.player.image = p1ImageRef.current;
+
+        // The guest owns its own particle simulation — the effects it spawns
+        // from replayed events still need to be animated.
+        updateParticles(frameDelta);
+        gameStateRef.current.particleCount = getParticleCount();
+
+        advanceLocalShots(frameDelta, effectiveWidth, effectiveHeight);
+        // Retire local tracers once the authoritative shot has caught up to
+        // them, so the two never render on top of each other.
+        reconcileLocalShots(world.projectiles);
+
+        if (timestamp - lastDisplayRef.current > 100) {
+          lastDisplayRef.current = timestamp;
+          publishDisplayState();
+        }
+
+        if (gameStateRef.current.wave > lastWaveRef.current) {
+          lastWaveRef.current = gameStateRef.current.wave;
+          playWaveComplete();
+        }
       }
 
       // Attach player2 to gameState so scene components can read it
@@ -1230,12 +1072,319 @@ export default function CoopGame({
       animationFrameRef.current = requestAnimationFrame(gameLoop);
     };
 
+    // ---------------------------------------------------------------- helpers
+
+    /** Host: one fixed tick of the guest's avatar, driven by its input queue. */
+    function simulateRemotePlayerTick(width: number, height: number) {
+      const gs = gameStateRef.current;
+      if (!gs || !player2Ref.current) return;
+
+      player2Ref.current = recalculatePlayerStats(player2Ref.current, Date.now());
+      const p2 = player2Ref.current;
+      const cmd = commandQueueRef.current.next();
+
+      applyMoveCommand(
+        p2.position,
+        p2.velocity,
+        cmd,
+        p2.speed,
+        { width, height, radius: p2.radius },
+        FIXED_DT,
+      );
+
+      const now = Date.now();
+      const aimPos = {
+        x: p2.position.x + Math.cos(cmd.aim) * 200,
+        y: p2.position.y + Math.sin(cmd.aim) * 200,
+      };
+
+      for (const weapon of p2.weapons) {
+        if (now - weapon.lastFired < weapon.fireRate) continue;
+        const angle = Math.atan2(aimPos.y - p2.position.y, aimPos.x - p2.position.x);
+        const projectileCount = weapon.projectileCount || 1;
+
+        for (let i = 0; i < projectileCount; i++) {
+          let projectileAngle = angle;
+          if (projectileCount > 1) {
+            const spread = weapon.type === 'spread' ? Math.PI / 3 : Math.PI / 6;
+            projectileAngle = angle - spread / 2 + (spread * i / (projectileCount - 1));
+          }
+
+          const proj = acquireProjectile();
+          proj.id = `p2-${proj.nid}`;
+          proj.position.x = p2.position.x;
+          proj.position.y = p2.position.y;
+          proj.velocity.x = Math.cos(projectileAngle) * weapon.projectileSpeed;
+          proj.velocity.y = Math.sin(projectileAngle) * weapon.projectileSpeed;
+          proj.radius = 6;
+          proj.color = PLAYER_COLORS[1];
+          proj.damage = weapon.damage;
+          proj.isEnemy = false;
+          proj.piercing = weapon.piercing || 0;
+          proj.weaponType = weapon.type;
+          proj.hitEnemies.clear();
+        }
+        createMuzzleFlash(p2.position, angle, PLAYER_COLORS[1], 1);
+        weapon.lastFired = now;
+      }
+
+      // P2 contact damage
+      for (const enemy of gs.enemies) {
+        const dist = Math.hypot(enemy.position.x - p2.position.x, enemy.position.y - p2.position.y);
+        if (dist < enemy.radius + p2.radius && now > p2.invulnerableUntil) {
+          p2.health -= enemy.damage;
+          p2.invulnerableUntil = now + 1000;
+          gs.totalDamageTaken += enemy.damage;
+          gs.screenShake = Math.max(gs.screenShake, 22);
+          createPlayerHurtEffect(p2.position, true);
+          recordEvent([
+            NetEventKind.PlayerHurt,
+            now,
+            Math.round(p2.position.x),
+            Math.round(p2.position.y),
+            enemy.damage,
+            1, // heavy
+            1, // owner: the guest's avatar
+          ]);
+          playDamage();
+        }
+      }
+
+      // P2 magnet + XP pickup
+      const magnetRange = 100 * p2.magnetMultiplier;
+      const orbCount = getXPOrbCount();
+      for (let i = orbCount - 1; i >= 0; i--) {
+        const orb = gs.experienceOrbs[i];
+        const dist = Math.hypot(orb.position.x - p2.position.x, orb.position.y - p2.position.y);
+        if (dist < magnetRange) {
+          const pullStrength = 0.1 * (1 - dist / magnetRange);
+          orb.position.x += (p2.position.x - orb.position.x) * pullStrength;
+          orb.position.y += (p2.position.y - orb.position.y) * pullStrength;
+        }
+        if (dist < p2.radius + 8) {
+          gs.player.experience += orb.value;
+          releaseXPOrb(orb);
+        }
+      }
+
+      gs.projectileCount = getProjectileCount();
+      gs.experienceOrbCount = getXPOrbCount();
+    }
+
+    /** Host: build and send an authoritative snapshot. */
+    function sendSnapshot(timestamp: number) {
+      const gs = gameStateRef.current;
+      if (!gs) return;
+
+      const prunedEnemies = gs.enemies.map(e => ({
+        id: e.id,
+        position: e.position,
+        velocity: e.velocity,
+        health: e.health,
+        maxHealth: e.maxHealth,
+        type: e.type,
+        radius: e.radius,
+        damage: e.damage,
+        color: e.color,
+        ghostAlpha: e.ghostAlpha,
+        spawnTime: e.spawnTime,
+        isElite: e.isElite,
+      }));
+
+      const prunedProjectiles = [];
+      const prCount = getProjectileCount();
+      for (let pi = 0; pi < prCount; pi++) {
+        const pr = gs.projectiles[pi];
+        prunedProjectiles.push({
+          nid: pr.nid,
+          position: pr.position,
+          velocity: pr.velocity,
+          damage: pr.damage,
+          radius: pr.radius,
+          color: pr.color,
+          isEnemy: pr.isEnemy,
+          piercing: pr.piercing,
+        });
+      }
+
+      const prunedOrbs = [];
+      const xpCount = getXPOrbCount();
+      for (let oi = 0; oi < xpCount; oi++) {
+        const o = gs.experienceOrbs[oi];
+        prunedOrbs.push({ position: o.position, value: o.value });
+      }
+
+      const prunedPlayer = {
+        position: gs.player.position,
+        velocity: gs.player.velocity,
+        health: gs.player.health,
+        maxHealth: gs.player.maxHealth,
+        radius: gs.player.radius,
+        color: gs.player.color,
+        invulnerableUntil: gs.player.invulnerableUntil,
+        level: gs.player.level,
+        experience: gs.player.experience,
+        kills: gs.player.kills,
+        weapons: gs.player.weapons.map(w => ({ type: w.type, level: w.level })),
+        speed: gs.player.speed,
+        baseSpeed: gs.player.baseSpeed,
+        speedBonus: gs.player.speedBonus,
+        magnetMultiplier: gs.player.magnetMultiplier,
+        magnetBonus: gs.player.magnetBonus,
+        activeBuffs: gs.player.activeBuffs,
+      };
+
+      const p2 = player2Ref.current;
+      const prunedPlayer2 = p2 ? {
+        position: p2.position,
+        velocity: p2.velocity,
+        health: p2.health,
+        maxHealth: p2.maxHealth,
+        radius: p2.radius,
+        color: p2.color,
+        invulnerableUntil: p2.invulnerableUntil,
+        level: p2.level,
+        experience: p2.experience,
+        kills: p2.kills,
+        weapons: p2.weapons.map(w => ({
+          type: w.type, level: w.level, damage: w.damage, fireRate: w.fireRate,
+          projectileSpeed: w.projectileSpeed, projectileCount: w.projectileCount,
+          piercing: w.piercing, lastFired: w.lastFired,
+        })),
+        speed: p2.speed,
+        baseSpeed: p2.baseSpeed,
+        speedBonus: p2.speedBonus,
+        magnetMultiplier: p2.magnetMultiplier,
+        magnetBonus: p2.magnetBonus,
+        activeBuffs: p2.activeBuffs,
+      } : null;
+
+      sendGameState(socket, {
+        // Timestamped on the shared Date epoch so the guest can align it with
+        // the event timeline and its own clock.
+        t: performance.timeOrigin + timestamp,
+        ack: commandQueueRef.current.ackSeq,
+        player: prunedPlayer,
+        player2: prunedPlayer2,
+        score: gs.score,
+        wave: gs.wave,
+        multiplier: gs.multiplier,
+        killStreak: gs.killStreak,
+        nearMissCount: gs.nearMissCount,
+        gameTime: gs.gameTime,
+        screenShake: gs.screenShake,
+        pendingLevelUps: gs.pendingLevelUps,
+        enemies: prunedEnemies,
+        projectiles: prunedProjectiles,
+        powerups: gs.powerups,
+        experienceOrbs: prunedOrbs,
+        events: drainEvents(),
+        isGameOver: gs.isGameOver,
+        isRunning: gs.isRunning,
+        activeEvent: gs.activeEvent,
+        eventAnnounceTime: gs.eventAnnounceTime,
+        waveAnnounceTime: gs.waveAnnounceTime,
+      });
+    }
+
+    /** Guest: fire local tracer rounds so shooting feels instant. */
+    function predictLocalShots(p2: Player, width: number, height: number) {
+      const mousePos = inputRef.current.mousePos;
+      const now = Date.now();
+      // Local tracers must survive until the authoritative shot shows up on the
+      // delayed timeline, which is half a round trip plus the interpolation lag.
+      const lifeMs = Math.max(
+        140,
+        Math.min(520, latencyRef.current.halfRttMs + guestWorldRef.current.interpolationDelayMs + 60),
+      );
+
+      p2.weapons.forEach((weapon, weaponIndex) => {
+        const cooldownKey = `${weapon.type}-${weaponIndex}`;
+        const lastShotAt = localShotCooldownRef.current[cooldownKey] || 0;
+        if (now - lastShotAt < weapon.fireRate) return;
+
+        const angle = Math.atan2(mousePos.y - p2.position.y, mousePos.x - p2.position.x);
+        const projectileCount = weapon.projectileCount || 1;
+
+        for (let i = 0; i < projectileCount; i++) {
+          let projectileAngle = angle;
+          if (projectileCount > 1) {
+            const spread = weapon.type === 'spread' ? Math.PI / 3 : Math.PI / 6;
+            projectileAngle = angle - spread / 2 + (spread * i / (projectileCount - 1));
+          }
+
+          localPredictedProjectilesRef.current.push({
+            id: `local-p2-${now}-${Math.random()}-${i}`,
+            position: { ...p2.position },
+            velocity: {
+              x: Math.cos(projectileAngle) * weapon.projectileSpeed,
+              y: Math.sin(projectileAngle) * weapon.projectileSpeed,
+            },
+            radius: 6,
+            color: PLAYER_COLORS[1],
+            lifeMs,
+            maxLifeMs: lifeMs,
+          });
+        }
+
+        createMuzzleFlash(p2.position, angle, PLAYER_COLORS[1], 1);
+        localShotCooldownRef.current[cooldownKey] = now;
+      });
+    }
+
+    /** Drops predicted tracers that the real projectile has now replaced. */
+    function reconcileLocalShots(authoritative: { position: Vector2; color: string; isEnemy: boolean }[]) {
+      const list = localPredictedProjectilesRef.current;
+      if (list.length === 0) return;
+
+      let write = 0;
+      for (let i = 0; i < list.length; i++) {
+        const local = list[i];
+        let matched = false;
+        for (let j = 0; j < authoritative.length; j++) {
+          const auth = authoritative[j];
+          if (auth.isEnemy || auth.color !== PLAYER_COLORS[1]) continue;
+          const dx = auth.position.x - local.position.x;
+          const dy = auth.position.y - local.position.y;
+          if (dx * dx + dy * dy < 400) {
+            matched = true;
+            break;
+          }
+        }
+        if (!matched) list[write++] = local;
+      }
+      list.length = write;
+    }
+
+    function advanceLocalShots(delta: number, width: number, height: number) {
+      const list = localPredictedProjectilesRef.current;
+      if (list.length === 0) return;
+      const frameMs = delta * 16.67;
+
+      let write = 0;
+      for (let i = 0; i < list.length; i++) {
+        const proj = list[i];
+        proj.position.x += proj.velocity.x * delta;
+        proj.position.y += proj.velocity.y * delta;
+        proj.lifeMs -= frameMs;
+        if (
+          proj.lifeMs > 0 &&
+          proj.position.x >= -20 && proj.position.x <= width + 20 &&
+          proj.position.y >= -20 && proj.position.y <= height + 20
+        ) {
+          list[write++] = proj;
+        }
+      }
+      list.length = write;
+    }
+
     lastTimeRef.current = performance.now();
-    accRef.current = null; // will be initialized on first frame
+    accRef.current = null;
+    guestAccRef.current = null;
     animationFrameRef.current = requestAnimationFrame(gameLoop);
 
     return () => { cancelAnimationFrame(animationFrameRef.current); };
-  }, [isLoading, isPaused, showUpgrades, isHost, socket, players, finishGameOver, sendGuestInputNow, isTouchDevice, mobileScale]);
+  }, [isLoading, isPaused, showUpgrades, isHost, socket, players, finishGameOver, flushGuestInput, isTouchDevice, publishDisplayState]);
 
   return (
     <div className={`fixed inset-0 bg-brutal-black flex flex-col ${isTouchDevice ? 'game-touch-area safe-area-top safe-area-bottom' : ''}`}>
@@ -1258,6 +1407,15 @@ export default function CoopGame({
         </div>
 
         <div className="flex items-center gap-4">
+          {!isHost && latencyMs !== null && (
+            <span
+              className="font-mono text-[10px] uppercase tracking-wider"
+              style={{ color: latencyMs < 80 ? '#39ff14' : latencyMs < 160 ? '#e4ff1a' : '#ff2d6a' }}
+              title="Round-trip time to the host"
+            >
+              {latencyMs}ms
+            </span>
+          )}
           <button
             onClick={() => {
               setSoundEnabled(s => {
@@ -1365,7 +1523,10 @@ export default function CoopGame({
           <Canvas
             orthographic
             camera={{ position: [0, 0, 100], near: 0.1, far: 1000 }}
-            gl={{ antialias: false, alpha: false }}
+            gl={{ antialias: false, alpha: false, powerPreference: 'high-performance' }}
+            // Phones routinely report DPR 3-4; rendering a bloom-heavy scene at
+            // that density is what makes mobile drop frames. Cap it.
+            dpr={isTouchDevice ? [1, 1.75] : [1, 2]}
             style={{ position: 'absolute', inset: 0, background: '#0a0a0a' }}
           >
             <CoopGameScene
@@ -1374,7 +1535,7 @@ export default function CoopGame({
               player2Image={p2ImageRef.current}
               localPredictedProjectilesRef={localPredictedProjectilesRef}
               isHost={isHost}
-              mobileScale={isTouchDevice ? 0.7 : 1}
+              mobileScale={mobileScale}
             />
           </Canvas>
         )}
@@ -1391,14 +1552,14 @@ export default function CoopGame({
         )}
 
         {/* DOM overlays */}
-        <TextParticles gameStateRef={gameStateRef} />
-        <PowerupSprites gameStateRef={gameStateRef} />
-        <CoopOverlay gameStateRef={gameStateRef} />
+        <TextParticles gameStateRef={gameStateRef} worldScale={mobileScale} />
+        <PowerupSprites gameStateRef={gameStateRef} worldScale={mobileScale} />
+        <CoopOverlay gameStateRef={gameStateRef} worldScale={mobileScale} />
         <HUD displayState={displayState ? {
           score: displayState.score,
           wave: displayState.wave,
-          health: displayState.health,
-          maxHealth: displayState.maxHealth,
+          health: isHost ? displayState.health : displayState.health2,
+          maxHealth: isHost ? displayState.maxHealth : displayState.maxHealth2,
           level: displayState.level,
           experience: displayState.experience,
           experienceToLevel: displayState.experienceToLevel,
@@ -1456,7 +1617,16 @@ export default function CoopGame({
                 <span className="text-[9px] ml-1" style={{ color: '#e4ff1a' }}>x{displayState.multiplier.toFixed(1)}</span>
               )}
             </div>
-            <div className="text-[9px] text-electric-cyan">LV{displayState.level} W{displayState.wave}</div>
+            <div className="text-[9px] text-electric-cyan flex items-center gap-1">
+              <span>LV{displayState.level} W{displayState.wave}</span>
+              {!isHost && latencyMs !== null && (
+                <span
+                  className="w-1.5 h-1.5 rounded-full"
+                  style={{ backgroundColor: latencyMs < 80 ? '#39ff14' : latencyMs < 160 ? '#e4ff1a' : '#ff2d6a' }}
+                  title={`${latencyMs}ms to host`}
+                />
+              )}
+            </div>
           </div>
           {/* P2 HP */}
           <div className="flex flex-col gap-0.5" style={{ width: '25%' }}>

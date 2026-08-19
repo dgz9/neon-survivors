@@ -11,7 +11,7 @@ import { XPOrbInstances } from './XPOrbInstances';
 import { ParticleSystem } from './ParticleSystem';
 import { ArenaBackground } from './ArenaBackground';
 import { ScreenEffects } from './ScreenEffects';
-import { EffectComposer, Bloom } from '@react-three/postprocessing';
+import { PostFX } from './PostFX';
 
 interface LocalPredictedProjectile {
   id: string;
@@ -146,14 +146,8 @@ export function CoopGameScene({
         )}
         <ScreenEffects gameStateRef={gameStateRef} />
       </SceneRoot>
-      <EffectComposer>
-        <Bloom
-          luminanceThreshold={0.3}
-          luminanceSmoothing={0.9}
-          intensity={1.5}
-          mipmapBlur
-        />
-      </EffectComposer>
+      {/* Same reactive post stack as single player so co-op does not look flat. */}
+      <PostFX gameStateRef={gameStateRef} />
     </>
   );
 }

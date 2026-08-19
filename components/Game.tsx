@@ -134,6 +134,8 @@ export default function Game({ playerImageUrl, playerName, arena = 'grid', onGam
   }, []);
 
   const mobileScale = isTouchDevice ? 0.7 : 1;
+  const mobileScaleRef = useRef(mobileScale);
+  mobileScaleRef.current = mobileScale;
 
   // Initialize game (only once)
   const initGame = useCallback(async () => {
@@ -170,6 +172,13 @@ export default function Game({ playerImageUrl, playerName, arena = 'grid', onGam
   useEffect(() => {
     const hasTouch = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
     setIsTouchDevice(hasTouch);
+  }, []);
+
+  // Lock the document while a match is running so mobile browsers cannot
+  // pull-to-refresh, rubber-band, or pinch-zoom the arena out of frame.
+  useEffect(() => {
+    document.documentElement.classList.add('playing');
+    return () => document.documentElement.classList.remove('playing');
   }, []);
 
   // Touch control callbacks
@@ -224,9 +233,11 @@ export default function Game({ playerImageUrl, playerName, arena = 'grid', onGam
       const el = gameAreaRef.current;
       if (el) {
         const rect = el.getBoundingClientRect();
+        // Convert to world coordinates — the canvas is zoomed out on mobile.
+        const scale = mobileScaleRef.current;
         inputRef.current.mousePos = {
-          x: e.clientX - rect.left,
-          y: e.clientY - rect.top,
+          x: (e.clientX - rect.left) / scale,
+          y: (e.clientY - rect.top) / scale,
         };
       }
     };
@@ -449,6 +460,9 @@ export default function Game({ playerImageUrl, playerName, arena = 'grid', onGam
 
         if (gs.player.health < lastHealthRef.current) {
           playDamage();
+          // Haptic thump on phones — the strongest "you got hit" cue available
+          // when the screen is half-covered by thumbs.
+          if (typeof navigator !== 'undefined' && navigator.vibrate) navigator.vibrate(30);
         }
         lastHealthRef.current = gs.player.health;
 
@@ -673,10 +687,13 @@ export default function Game({ playerImageUrl, playerName, arena = 'grid', onGam
           <Canvas
             orthographic
             camera={{ position: [0, 0, 100], near: 0.1, far: 1000 }}
-            gl={{ antialias: false, alpha: false }}
+            gl={{ antialias: false, alpha: false, powerPreference: 'high-performance' }}
+            // Phones routinely report DPR 3-4; rendering a bloom-heavy scene at
+            // that density is what makes mobile drop frames. Cap it.
+            dpr={isTouchDevice ? [1, 1.75] : [1, 2]}
             style={{ position: 'absolute', inset: 0, background: '#0a0a0a' }}
           >
-            <GameScene gameStateRef={gameStateRef} playerImage={playerImage} mobileScale={isTouchDevice ? 0.7 : 1} />
+            <GameScene gameStateRef={gameStateRef} playerImage={playerImage} mobileScale={mobileScale} />
           </Canvas>
         )}
 
@@ -692,8 +709,8 @@ export default function Game({ playerImageUrl, playerName, arena = 'grid', onGam
         )}
 
         {/* DOM overlays */}
-        <TextParticles gameStateRef={gameStateRef} />
-        <PowerupSprites gameStateRef={gameStateRef} />
+        <TextParticles gameStateRef={gameStateRef} worldScale={mobileScale} />
+        <PowerupSprites gameStateRef={gameStateRef} worldScale={mobileScale} />
         <HUD displayState={displayState} isMobile={isTouchDevice} />
 
         {/* Stats display - permanent bonuses and active buffs (hidden on mobile) */}

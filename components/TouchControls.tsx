@@ -16,10 +16,30 @@ interface JoystickState {
   origin: Vector2;
   current: Vector2;
   active: boolean;
+  /** Eases the ring in/out so sticks don't pop. */
+  opacity: number;
 }
 
-const JOYSTICK_RADIUS = 50;
-const JOYSTICK_DEAD_ZONE = 8;
+/** Fraction of travel ignored around the centre. */
+const DEAD_ZONE = 0.14;
+/** Distance the aim vector is projected in world units. */
+const AIM_DISTANCE = 220;
+
+function createStick(): JoystickState {
+  return {
+    touchId: null,
+    origin: { x: 0, y: 0 },
+    current: { x: 0, y: 0 },
+    active: false,
+    opacity: 0,
+  };
+}
+
+function vibrate(ms: number) {
+  if (typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function') {
+    navigator.vibrate(ms);
+  }
+}
 
 export default function TouchControls({
   onMovementChange,
@@ -29,83 +49,128 @@ export default function TouchControls({
   visible,
 }: TouchControlsProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const leftStick = useRef<JoystickState>({
-    touchId: null,
-    origin: { x: 0, y: 0 },
-    current: { x: 0, y: 0 },
-    active: false,
-  });
-  const rightStick = useRef<JoystickState>({
-    touchId: null,
-    origin: { x: 0, y: 0 },
-    current: { x: 0, y: 0 },
-    active: false,
-  });
+  const leftStick = useRef<JoystickState>(createStick());
+  const rightStick = useRef<JoystickState>(createStick());
   const animFrameRef = useRef<number>(0);
+  /** Scaled to the viewport so the stick suits both phones and tablets. */
+  const radiusRef = useRef(56);
+  /** Resting positions for the idle hint rings. */
+  const anchorsRef = useRef({ left: { x: 0, y: 0 }, right: { x: 0, y: 0 } });
+
+  const layout = useCallback((width: number, height: number) => {
+    const shortSide = Math.min(width, height);
+    radiusRef.current = Math.max(46, Math.min(84, shortSide * 0.17));
+    const inset = radiusRef.current + 28;
+    anchorsRef.current.left = { x: inset, y: height - inset };
+    anchorsRef.current.right = { x: width - inset, y: height - inset };
+  }, []);
 
   const drawJoysticks = useCallback(() => {
+    animFrameRef.current = requestAnimationFrame(drawJoysticks);
+
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    // Match canvas internal size to display size
+    // Back the canvas with real device pixels — at 1x the rings were visibly
+    // soft on every modern phone.
     const rect = canvas.getBoundingClientRect();
-    if (canvas.width !== rect.width || canvas.height !== rect.height) {
-      canvas.width = rect.width;
-      canvas.height = rect.height;
+    const dpr = Math.min(window.devicePixelRatio || 1, 3);
+    const targetW = Math.round(rect.width * dpr);
+    const targetH = Math.round(rect.height * dpr);
+    if (canvas.width !== targetW || canvas.height !== targetH) {
+      canvas.width = targetW;
+      canvas.height = targetH;
+      layout(rect.width, rect.height);
     }
 
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, rect.width, rect.height);
 
-    const drawStick = (stick: JoystickState, color: string) => {
-      if (!stick.active) return;
+    const radius = radiusRef.current;
+
+    const drawStick = (stick: JoystickState, anchor: Vector2, color: string, label: string) => {
+      // Ease the ring toward its target visibility instead of snapping.
+      const target = stick.active ? 1 : 0.22;
+      stick.opacity += (target - stick.opacity) * 0.18;
+      if (stick.opacity < 0.01) return;
+
+      const cx = stick.active ? stick.origin.x : anchor.x;
+      const cy = stick.active ? stick.origin.y : anchor.y;
+      const o = stick.opacity;
+
+      ctx.save();
 
       // Outer ring
       ctx.beginPath();
-      ctx.arc(stick.origin.x, stick.origin.y, JOYSTICK_RADIUS, 0, Math.PI * 2);
+      ctx.arc(cx, cy, radius, 0, Math.PI * 2);
       ctx.strokeStyle = color;
       ctx.lineWidth = 2;
-      ctx.globalAlpha = 0.3;
+      ctx.globalAlpha = 0.32 * o;
       ctx.stroke();
 
-      // Filled background
       ctx.beginPath();
-      ctx.arc(stick.origin.x, stick.origin.y, JOYSTICK_RADIUS, 0, Math.PI * 2);
+      ctx.arc(cx, cy, radius, 0, Math.PI * 2);
       ctx.fillStyle = color;
-      ctx.globalAlpha = 0.08;
+      ctx.globalAlpha = 0.06 * o;
       ctx.fill();
 
-      // Inner thumb
+      if (!stick.active) {
+        // Idle hint so a new player knows where to put their thumbs.
+        ctx.globalAlpha = 0.4 * o;
+        ctx.fillStyle = color;
+        ctx.font = '600 10px monospace';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(label, cx, cy);
+        ctx.restore();
+        return;
+      }
+
       const dx = stick.current.x - stick.origin.x;
       const dy = stick.current.y - stick.origin.y;
-      const dist = Math.sqrt(dx * dx + dy * dy);
-      const clampedDist = Math.min(dist, JOYSTICK_RADIUS);
+      const dist = Math.hypot(dx, dy);
+      const clampedDist = Math.min(dist, radius);
       const angle = Math.atan2(dy, dx);
-      const thumbX = stick.origin.x + Math.cos(angle) * clampedDist;
-      const thumbY = stick.origin.y + Math.sin(angle) * clampedDist;
+      const thumbX = cx + Math.cos(angle) * clampedDist;
+      const thumbY = cy + Math.sin(angle) * clampedDist;
+      const thumbR = radius * 0.4;
+
+      // Direction wedge — reads the input at a glance without looking down.
+      if (dist > radius * DEAD_ZONE) {
+        ctx.beginPath();
+        ctx.moveTo(cx, cy);
+        ctx.arc(cx, cy, radius, angle - 0.34, angle + 0.34);
+        ctx.closePath();
+        ctx.fillStyle = color;
+        ctx.globalAlpha = 0.14 * o;
+        ctx.fill();
+      }
+
+      ctx.globalAlpha = o;
+      ctx.shadowColor = color;
+      ctx.shadowBlur = 18;
 
       ctx.beginPath();
-      ctx.arc(thumbX, thumbY, 20, 0, Math.PI * 2);
+      ctx.arc(thumbX, thumbY, thumbR, 0, Math.PI * 2);
       ctx.fillStyle = color;
-      ctx.globalAlpha = 0.5;
+      ctx.globalAlpha = 0.45 * o;
       ctx.fill();
 
       ctx.beginPath();
-      ctx.arc(thumbX, thumbY, 20, 0, Math.PI * 2);
+      ctx.arc(thumbX, thumbY, thumbR, 0, Math.PI * 2);
       ctx.strokeStyle = color;
-      ctx.lineWidth = 2;
-      ctx.globalAlpha = 0.8;
+      ctx.lineWidth = 2.5;
+      ctx.globalAlpha = 0.95 * o;
       ctx.stroke();
 
-      ctx.globalAlpha = 1;
+      ctx.restore();
     };
 
-    drawStick(leftStick.current, '#00f0ff');
-    drawStick(rightStick.current, '#ff2d6a');
-
-    animFrameRef.current = requestAnimationFrame(drawJoysticks);
-  }, []);
+    drawStick(leftStick.current, anchorsRef.current.left, '#00f0ff', 'MOVE');
+    drawStick(rightStick.current, anchorsRef.current.right, '#ff2d6a', 'AIM');
+  }, [layout]);
 
   useEffect(() => {
     if (!visible) return;
@@ -120,17 +185,65 @@ export default function TouchControls({
     if (!canvas) return;
 
     const getStickOutput = (stick: JoystickState): Vector2 => {
+      const radius = radiusRef.current;
       const dx = stick.current.x - stick.origin.x;
       const dy = stick.current.y - stick.origin.y;
-      const dist = Math.sqrt(dx * dx + dy * dy);
-      if (dist < JOYSTICK_DEAD_ZONE) return { x: 0, y: 0 };
-      const clampedDist = Math.min(dist, JOYSTICK_RADIUS);
-      const normalizedDist = clampedDist / JOYSTICK_RADIUS;
+      const dist = Math.hypot(dx, dy);
+      const normalized = Math.min(dist / radius, 1);
+      if (normalized < DEAD_ZONE) return { x: 0, y: 0 };
+
+      // Rescale past the dead zone so the very first pixel of real travel maps
+      // to a small movement rather than an instant jump to ~15% speed.
+      const magnitude = (normalized - DEAD_ZONE) / (1 - DEAD_ZONE);
       const angle = Math.atan2(dy, dx);
       return {
-        x: Math.cos(angle) * normalizedDist,
-        y: Math.sin(angle) * normalizedDist,
+        x: Math.cos(angle) * magnitude,
+        y: Math.sin(angle) * magnitude,
       };
+    };
+
+    /**
+     * Keeps the stick usable when a thumb drags well past the ring: the origin
+     * trails the finger so the stick stays pinned at full deflection instead of
+     * silently clamping and feeling stuck.
+     */
+    const trailOrigin = (stick: JoystickState) => {
+      const radius = radiusRef.current;
+      const dx = stick.current.x - stick.origin.x;
+      const dy = stick.current.y - stick.origin.y;
+      const dist = Math.hypot(dx, dy);
+      if (dist > radius) {
+        const pull = (dist - radius) / dist;
+        stick.origin.x += dx * pull;
+        stick.origin.y += dy * pull;
+      }
+    };
+
+    const emitAim = (stick: JoystickState) => {
+      const output = getStickOutput(stick);
+      if (output.x === 0 && output.y === 0) {
+        // Inside the dead zone the player is not steering — hand aiming back to
+        // auto-target rather than freezing on the last direction.
+        onAimChange(null);
+        return;
+      }
+      const len = Math.hypot(output.x, output.y) || 1;
+      onAimChange({
+        x: (output.x / len) * AIM_DISTANCE,
+        y: (output.y / len) * AIM_DISTANCE,
+      });
+    };
+
+    const releaseLeft = () => {
+      leftStick.current.touchId = null;
+      leftStick.current.active = false;
+      onMovementChange({ x: 0, y: 0 });
+    };
+
+    const releaseRight = () => {
+      rightStick.current.touchId = null;
+      rightStick.current.active = false;
+      onAimChange(null);
     };
 
     const handleTouchStart = (e: TouchEvent) => {
@@ -142,28 +255,36 @@ export default function TouchControls({
         const touch = e.changedTouches[i];
         const x = touch.clientX - rect.left;
         const y = touch.clientY - rect.top;
+        const prefersLeft = x < midX;
 
-        if (x < midX) {
-          // Left side -> movement joystick
-          if (leftStick.current.touchId === null) {
-            leftStick.current = {
-              touchId: touch.identifier,
-              origin: { x, y },
-              current: { x, y },
-              active: true,
-            };
-          }
-        } else {
-          // Right side -> aim joystick
-          if (rightStick.current.touchId === null) {
-            rightStick.current = {
-              touchId: touch.identifier,
-              origin: { x, y },
-              current: { x, y },
-              active: true,
-            };
-          }
+        // Prefer the stick on the side that was touched, but fall back to the
+        // free one — otherwise a thumb that lands slightly across the midline
+        // does nothing at all.
+        let stick: JoystickState | null = null;
+        let isLeft = prefersLeft;
+        if (prefersLeft && leftStick.current.touchId === null) {
+          stick = leftStick.current;
+        } else if (!prefersLeft && rightStick.current.touchId === null) {
+          stick = rightStick.current;
+        } else if (prefersLeft && rightStick.current.touchId === null) {
+          stick = rightStick.current;
+          isLeft = false;
+        } else if (!prefersLeft && leftStick.current.touchId === null) {
+          stick = leftStick.current;
+          isLeft = true;
         }
+        if (!stick) continue;
+
+        stick.touchId = touch.identifier;
+        stick.origin.x = x;
+        stick.origin.y = y;
+        stick.current.x = x;
+        stick.current.y = y;
+        stick.active = true;
+
+        if (isLeft) onMovementChange({ x: 0, y: 0 });
+        else onAimChange(null);
+        vibrate(8);
       }
     };
 
@@ -177,24 +298,15 @@ export default function TouchControls({
         const y = touch.clientY - rect.top;
 
         if (touch.identifier === leftStick.current.touchId) {
-          leftStick.current.current = { x, y };
-          const output = getStickOutput(leftStick.current);
-          onMovementChange(output);
+          leftStick.current.current.x = x;
+          leftStick.current.current.y = y;
+          trailOrigin(leftStick.current);
+          onMovementChange(getStickOutput(leftStick.current));
         } else if (touch.identifier === rightStick.current.touchId) {
-          rightStick.current.current = { x, y };
-          // Convert aim joystick to a world position relative to game area center
-          const gameRect = gameAreaRef.current?.getBoundingClientRect();
-          if (gameRect) {
-            const output = getStickOutput(rightStick.current);
-            if (Math.abs(output.x) > 0 || Math.abs(output.y) > 0) {
-              // Project aim direction from player center with large distance
-              const aimDistance = 200;
-              onAimChange({
-                x: output.x * aimDistance,
-                y: output.y * aimDistance,
-              });
-            }
-          }
+          rightStick.current.current.x = x;
+          rightStick.current.current.y = y;
+          trailOrigin(rightStick.current);
+          emitAim(rightStick.current);
         }
       }
     };
@@ -203,37 +315,37 @@ export default function TouchControls({
       e.preventDefault();
       for (let i = 0; i < e.changedTouches.length; i++) {
         const touch = e.changedTouches[i];
-
-        if (touch.identifier === leftStick.current.touchId) {
-          leftStick.current = {
-            touchId: null,
-            origin: { x: 0, y: 0 },
-            current: { x: 0, y: 0 },
-            active: false,
-          };
-          onMovementChange({ x: 0, y: 0 });
-        } else if (touch.identifier === rightStick.current.touchId) {
-          rightStick.current = {
-            touchId: null,
-            origin: { x: 0, y: 0 },
-            current: { x: 0, y: 0 },
-            active: false,
-          };
-          onAimChange(null);
-        }
+        if (touch.identifier === leftStick.current.touchId) releaseLeft();
+        else if (touch.identifier === rightStick.current.touchId) releaseRight();
       }
+    };
+
+    /** A backgrounded tab never delivers touchend, which used to leave the
+     *  player sprinting into a wall on return. */
+    const releaseAll = () => {
+      releaseLeft();
+      releaseRight();
+    };
+
+    const handleVisibility = () => {
+      if (document.hidden) releaseAll();
     };
 
     canvas.addEventListener('touchstart', handleTouchStart, { passive: false });
     canvas.addEventListener('touchmove', handleTouchMove, { passive: false });
     canvas.addEventListener('touchend', handleTouchEnd, { passive: false });
     canvas.addEventListener('touchcancel', handleTouchEnd, { passive: false });
+    document.addEventListener('visibilitychange', handleVisibility);
+    window.addEventListener('blur', releaseAll);
 
     return () => {
       canvas.removeEventListener('touchstart', handleTouchStart);
       canvas.removeEventListener('touchmove', handleTouchMove);
       canvas.removeEventListener('touchend', handleTouchEnd);
       canvas.removeEventListener('touchcancel', handleTouchEnd);
+      document.removeEventListener('visibilitychange', handleVisibility);
+      window.removeEventListener('blur', releaseAll);
+      releaseAll();
     };
   }, [visible, onMovementChange, onAimChange, gameAreaRef]);
 
@@ -244,16 +356,22 @@ export default function TouchControls({
       {/* Touch overlay canvas for joystick rendering */}
       <canvas
         ref={canvasRef}
-        className="absolute inset-0 z-40 touch-none"
+        className="absolute inset-0 z-40 touch-none select-none"
         style={{ pointerEvents: 'auto' }}
       />
-      {/* Pause button for mobile */}
+      {/* Pause button — sized to a comfortable tap target and kept clear of the
+          notch on devices that report a safe area. */}
       <button
         onClick={onPause}
-        className="absolute top-2 right-2 z-50 w-10 h-10 flex items-center justify-center bg-brutal-dark/80 border border-white/20 active:bg-white/20 touch-none"
-        style={{ pointerEvents: 'auto' }}
+        aria-label="Pause"
+        className="absolute z-50 w-12 h-12 flex items-center justify-center bg-brutal-dark/80 border border-white/20 active:bg-white/25 touch-none"
+        style={{
+          pointerEvents: 'auto',
+          top: 'calc(env(safe-area-inset-top, 0px) + 8px)',
+          right: 'calc(env(safe-area-inset-right, 0px) + 8px)',
+        }}
       >
-        <span className="text-white/60 text-lg font-mono">||</span>
+        <span className="text-white/70 text-xl font-mono leading-none">||</span>
       </button>
     </>
   );

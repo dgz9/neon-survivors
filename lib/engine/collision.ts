@@ -1,6 +1,7 @@
 import { Enemy, Player } from '@/types/game';
-import { particlePool, projectilePool, enemyGrid, generateId } from './context';
-import { emitWeaponImpactEffect } from './effects';
+import { projectilePool, enemyGrid } from './context';
+import { emitWeaponImpactEffect, emitText, createBlast, emitParticle } from './effects';
+import { recordEvent, NetEventKind } from './netEvents';
 import { COLORS } from '../colors';
 
 export function checkProjectileCollisions(
@@ -55,145 +56,75 @@ export function checkProjectileCollisions(
         enemy.health -= actualDamage;
         damageDealt += actualDamage;
 
-        // Damage number particle
-        const dp = particlePool.acquire();
-        dp.id = generateId();
-        dp.position.x = projectile.position.x + (Math.random() - 0.5) * 8;
-        dp.position.y = projectile.position.y - 5;
-        dp.velocity.x = (Math.random() - 0.5) * 2.5;
-        dp.velocity.y = -3.5;
-        dp.color = COLORS.yellow;
-        dp.size = 16;
-        dp.life = 550;
-        dp.maxLife = 550;
-        dp.type = 'text';
-        dp.text = Math.floor(actualDamage).toString();
+        // Render-side hit feedback: a bright flash frame plus a shove along the
+        // projectile's travel direction. Bosses are immovable.
+        enemy.hitFlash = currentTime;
+        if (enemy.type !== 'boss') {
+          const pSpeed = Math.hypot(projectile.velocity.x, projectile.velocity.y) || 1;
+          // Lighter enemies get shoved further.
+          const punch = Math.min(7, (12 / Math.max(6, enemy.radius)) * 3.2);
+          if (!enemy.knockback) enemy.knockback = { x: 0, y: 0 };
+          enemy.knockback.x += (projectile.velocity.x / pSpeed) * punch;
+          enemy.knockback.y += (projectile.velocity.y / pSpeed) * punch;
+        }
+
+        // Damage number — bigger and hotter for bigger hits so chip damage and
+        // heavy hits are distinguishable at a glance.
+        const dmgWeight = Math.min(1, actualDamage / 60);
+        emitText(
+          projectile.position.x + (Math.random() - 0.5) * 8,
+          projectile.position.y - 5,
+          Math.floor(actualDamage).toString(),
+          dmgWeight > 0.66 ? COLORS.orange : dmgWeight > 0.33 ? COLORS.yellow : COLORS.white,
+          15 + dmgWeight * 15,
+          520 + dmgWeight * 260,
+          -3.5 - dmgWeight * 1.5,
+        );
 
         emitWeaponImpactEffect(projectile, enemy);
+        recordEvent([
+          NetEventKind.Hit,
+          currentTime,
+          Math.round(projectile.position.x),
+          Math.round(projectile.position.y),
+          Math.round(projectile.velocity.x * 10) / 10,
+          Math.round(projectile.velocity.y * 10) / 10,
+          projectile.color,
+          projectile.weaponType || '',
+          Math.round(actualDamage),
+          enemy.color,
+          enemy.id,
+        ]);
 
         // Enemy body-chip sparks
-        for (let j = 0; j < 3; j++) {
+        for (let j = 0; j < 4; j++) {
           const sparkAngle = Math.random() * Math.PI * 2;
-          const sparkSpeed = 2 + Math.random() * 3;
-          const ep = particlePool.acquire();
-          ep.id = generateId();
-          ep.position.x = projectile.position.x;
-          ep.position.y = projectile.position.y;
-          ep.velocity.x = Math.cos(sparkAngle) * sparkSpeed;
-          ep.velocity.y = Math.sin(sparkAngle) * sparkSpeed;
-          ep.color = enemy.color;
-          ep.size = 2 + Math.random() * 2;
-          ep.life = 120 + Math.random() * 100;
-          ep.maxLife = 220;
-          ep.type = 'explosion';
+          const sparkSpeed = 3 + Math.random() * 5;
+          emitParticle(projectile.position.x, projectile.position.y, {
+            vx: Math.cos(sparkAngle) * sparkSpeed,
+            vy: Math.sin(sparkAngle) * sparkSpeed,
+            color: enemy.color,
+            size: 2.5 + Math.random() * 2.5,
+            life: 150 + Math.random() * 130,
+            type: 'explosion',
+            drag: 0.88,
+          });
         }
 
         // Missile explosion
         if (projectile.weaponType === 'missile' && projectile.explosionRadius) {
           const explosionRadius = projectile.explosionRadius;
           const explosionRadiusSq = explosionRadius * explosionRadius;
-          missileShake += 18;
+          missileShake += 26;
 
-          // Tinted center pulse
-          const flash = particlePool.acquire();
-          flash.id = generateId();
-          flash.position.x = projectile.position.x;
-          flash.position.y = projectile.position.y;
-          flash.velocity.x = 0;
-          flash.velocity.y = 0;
-          flash.color = COLORS.yellow;
-          flash.size = explosionRadius * 0.26;
-          flash.life = 90;
-          flash.maxLife = 90;
-          flash.type = 'ring';
-
-          // Inner fire burst
-          for (let j = 0; j < 30; j++) {
-            const expAngle = (j / 30) * Math.PI * 2 + Math.random() * 0.3;
-            const expSpeed = 2 + Math.random() * 6;
-            const xp = particlePool.acquire();
-            xp.id = generateId();
-            xp.position.x = projectile.position.x + (Math.random() - 0.5) * 12;
-            xp.position.y = projectile.position.y + (Math.random() - 0.5) * 12;
-            xp.velocity.x = Math.cos(expAngle) * expSpeed;
-            xp.velocity.y = Math.sin(expAngle) * expSpeed;
-            xp.color = j % 3 === 0 ? COLORS.yellow : COLORS.orange;
-            xp.size = 5 + Math.random() * 6;
-            xp.life = 350 + Math.random() * 250;
-            xp.maxLife = 600;
-            xp.type = 'explosion';
-          }
-
-          // Fast outward sparks
-          for (let j = 0; j < 15; j++) {
-            const sparkAngle = Math.random() * Math.PI * 2;
-            const sparkSpeed = 8 + Math.random() * 10;
-            const sk = particlePool.acquire();
-            sk.id = generateId();
-            sk.position.x = projectile.position.x;
-            sk.position.y = projectile.position.y;
-            sk.velocity.x = Math.cos(sparkAngle) * sparkSpeed;
-            sk.velocity.y = Math.sin(sparkAngle) * sparkSpeed;
-            sk.color = j % 2 === 0 ? COLORS.yellow : COLORS.white;
-            sk.size = 2 + Math.random() * 2;
-            sk.life = 200 + Math.random() * 150;
-            sk.maxLife = 350;
-            sk.type = 'spark';
-          }
-
-          // Debris trails
-          for (let j = 0; j < 8; j++) {
-            const trailAngle = (j / 8) * Math.PI * 2 + Math.random() * 0.4;
-            const trailSpeed = 6 + Math.random() * 4;
-            const tl = particlePool.acquire();
-            tl.id = generateId();
-            tl.position.x = projectile.position.x;
-            tl.position.y = projectile.position.y;
-            tl.velocity.x = Math.cos(trailAngle) * trailSpeed;
-            tl.velocity.y = Math.sin(trailAngle) * trailSpeed;
-            tl.color = COLORS.orange;
-            tl.size = 14;
-            tl.life = 250;
-            tl.maxLife = 250;
-            tl.type = 'trail';
-          }
-
-          // Explosion shockwave rings
-          const er1 = particlePool.acquire();
-          er1.id = generateId();
-          er1.position.x = projectile.position.x;
-          er1.position.y = projectile.position.y;
-          er1.velocity.x = 0;
-          er1.velocity.y = 0;
-          er1.color = COLORS.orange;
-          er1.size = explosionRadius;
-          er1.life = 400;
-          er1.maxLife = 400;
-          er1.type = 'ring';
-
-          const er2 = particlePool.acquire();
-          er2.id = generateId();
-          er2.position.x = projectile.position.x;
-          er2.position.y = projectile.position.y;
-          er2.velocity.x = 0;
-          er2.velocity.y = 0;
-          er2.color = COLORS.yellow;
-          er2.size = explosionRadius * 0.65;
-          er2.life = 300;
-          er2.maxLife = 300;
-          er2.type = 'ring';
-
-          const er3 = particlePool.acquire();
-          er3.id = generateId();
-          er3.position.x = projectile.position.x;
-          er3.position.y = projectile.position.y;
-          er3.velocity.x = 0;
-          er3.velocity.y = 0;
-          er3.color = COLORS.pink;
-          er3.size = explosionRadius * 1.2;
-          er3.life = 200;
-          er3.maxLife = 200;
-          er3.type = 'ring';
+          createBlast(projectile.position, explosionRadius, COLORS.yellow, COLORS.orange);
+          recordEvent([
+            NetEventKind.Explosion,
+            currentTime,
+            Math.round(projectile.position.x),
+            Math.round(projectile.position.y),
+            Math.round(explosionRadius),
+          ]);
 
           // Damage enemies in explosion radius via spatial grid
           enemyGrid.queryRadius(projectile.position.x, projectile.position.y, explosionRadius, (otherIdx) => {
@@ -211,18 +142,16 @@ export function checkProjectileCollisions(
               const splashDamage = projectile.damage * falloff * 0.7;
               otherEnemy.health -= splashDamage;
 
-              const sdp = particlePool.acquire();
-              sdp.id = generateId();
-              sdp.position.x = otherEnemy.position.x;
-              sdp.position.y = otherEnemy.position.y;
-              sdp.velocity.x = (Math.random() - 0.5) * 2;
-              sdp.velocity.y = -3;
-              sdp.color = COLORS.orange;
-              sdp.size = 12;
-              sdp.life = 450;
-              sdp.maxLife = 450;
-              sdp.type = 'text';
-              sdp.text = Math.floor(splashDamage).toString();
+              otherEnemy.hitFlash = currentTime;
+              emitText(
+                otherEnemy.position.x,
+                otherEnemy.position.y,
+                Math.floor(splashDamage).toString(),
+                COLORS.orange,
+                14,
+                450,
+                -3,
+              );
 
               if (otherEnemy.health <= 0 && !killedEnemyIds.has(otherEnemy.id)) {
                 killedEnemies.push(otherEnemy);

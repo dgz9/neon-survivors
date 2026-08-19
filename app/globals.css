@@ -151,6 +151,22 @@ body {
   -webkit-touch-callout: none;
   -webkit-user-select: none;
   user-select: none;
+  /* Stops iOS/Android pull-to-refresh and rubber-band scroll from firing when a
+     thumb drags past the edge of the arena mid-fight. */
+  overscroll-behavior: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* While a match is on, the page itself must never scroll or zoom — a stray
+   two-finger gesture used to pinch-zoom the whole game out of frame. */
+html.playing,
+html.playing body {
+  overscroll-behavior: none;
+  touch-action: none;
+  overflow: hidden;
+  position: fixed;
+  width: 100%;
+  height: 100%;
 }
 
 /* Safe area padding for notched devices */

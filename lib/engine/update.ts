@@ -19,7 +19,8 @@ import { initBossState, updateBoss } from './bossAI';
 import { collectExperienceOrbs, addExperience } from './experience';
 import { generateUpgrades } from './upgrades';
 import { createPowerup, collectPowerups, applyPowerup } from './powerups';
-import { createExplosion } from './effects';
+import { createExplosion, createBlast, createPlayerHurtEffect, updateParticles, emitParticle, emitText } from './effects';
+import { recordEvent, NetEventKind } from './netEvents';
 
 export function updateGameState(
   state: GameState,
@@ -98,6 +99,7 @@ export function updateGameState(
   screenShake = Math.max(screenShake, mShake);
 
   // Process killed enemies
+  let killHitStop = 0;
   killedEnemies.forEach(enemy => {
     score += enemy.points * multiplier;
     player.kills++;
@@ -105,6 +107,25 @@ export function updateGameState(
     multiplierTimer = currentTime + 3000;
     killStreak = currentTime <= killStreakTimer ? killStreak + 1 : 1;
     killStreakTimer = currentTime + 2200;
+
+    // Every kill kicks the camera, scaled by how big the target was. Chip kills
+    // give a nudge; heavies give a real jolt plus a couple of freeze frames.
+    const heft = Math.min(1, enemy.radius / 34);
+    screenShake = Math.max(screenShake, 5 + heft * 16 + (enemy.isElite ? 6 : 0));
+    if (enemy.radius >= 22 || enemy.isElite) {
+      killHitStop = Math.max(killHitStop, enemy.type === 'boss' ? 220 : 70 + heft * 60);
+    }
+
+    recordEvent([
+      NetEventKind.Kill,
+      currentTime,
+      Math.round(enemy.position.x),
+      Math.round(enemy.position.y),
+      enemy.color,
+      Math.round(enemy.radius),
+      enemy.isElite ? 1 : 0,
+      enemy.type === 'boss' ? 1 : 0,
+    ]);
 
     if (killStreak === 5 || killStreak === 10 || killStreak === 20) {
       const kp = particlePool.acquire();
@@ -190,26 +211,20 @@ export function updateGameState(
       eliteRing.type = 'ring';
 
       if (enemy.eliteModifier === 'volatile') {
-        screenShake = Math.max(screenShake, 18);
+        screenShake = Math.max(screenShake, 26);
         state = {
           ...state,
           screenFlash: currentTime,
           screenFlashColor: '255, 107, 26',
         };
-        for (let i = 0; i < 16; i++) {
-          const a = (i / 16) * Math.PI * 2;
-          const vp = particlePool.acquire();
-          vp.id = generateId();
-          vp.position.x = enemy.position.x;
-          vp.position.y = enemy.position.y;
-          vp.velocity.x = Math.cos(a) * (7 + Math.random() * 4);
-          vp.velocity.y = Math.sin(a) * (7 + Math.random() * 4);
-          vp.color = COLORS.orange;
-          vp.size = 6 + Math.random() * 3;
-          vp.life = 240 + Math.random() * 120;
-          vp.maxLife = 360;
-          vp.type = 'explosion';
-        }
+        createBlast(enemy.position, 55 + enemy.radius, COLORS.yellow, COLORS.orange);
+        recordEvent([
+          NetEventKind.Explosion,
+          currentTime,
+          Math.round(enemy.position.x),
+          Math.round(enemy.position.y),
+          Math.round(55 + enemy.radius),
+        ]);
       }
     }
 
@@ -309,6 +324,16 @@ export function updateGameState(
 
   state = { ...state, enemiesKilledThisWave: state.enemiesKilledThisWave + killedEnemies.length };
 
+  // Hit-stop: a couple of near-frozen frames on a heavy kill. Runs through the
+  // same slow-mo channel the accumulator already understands, so it stays
+  // deterministic and is mirrored to the co-op guest via the state sync.
+  if (killHitStop > 0) {
+    const until = currentTime + killHitStop;
+    if (!state.slowMoUntil || until > state.slowMoUntil) {
+      state = { ...state, slowMoUntil: until, slowMoFactor: 0.08 };
+    }
+  }
+
   // Check if multiplier should decay
   if (currentTime > multiplierTimer) {
     multiplier = Math.max(1, multiplier - 0.01 * deltaTime);
@@ -320,6 +345,19 @@ export function updateGameState(
   // Update enemies
   const newBossMinions: Enemy[] = [];
   enemies = enemies.map(e => {
+    // Bleed off hit knockback before the AI recomputes movement.
+    if (e.knockback && (e.knockback.x !== 0 || e.knockback.y !== 0)) {
+      e.position.x += e.knockback.x * effectiveDelta;
+      e.position.y += e.knockback.y * effectiveDelta;
+      const decay = Math.pow(0.72, effectiveDelta);
+      e.knockback.x *= decay;
+      e.knockback.y *= decay;
+      if (Math.abs(e.knockback.x) < 0.05 && Math.abs(e.knockback.y) < 0.05) {
+        e.knockback.x = 0;
+        e.knockback.y = 0;
+      }
+    }
+
     // Boss enemies use the boss AI state machine
     if (e.bossPhase) {
       const { enemy: updatedBoss, spawnedEnemies: minions } = updateBoss(e, player, effectiveDelta, currentTime, width, height, player2);
@@ -388,15 +426,25 @@ export function updateGameState(
       health: player.health - mitigatedDamage,
       invulnerableUntil: currentTime + 1000,
     };
-    screenShake = 20;
+    screenShake = Math.max(screenShake, 28);
     state = {
       ...state,
       screenFlash: currentTime,
       screenFlashColor: '255, 45, 106',
       totalDamageTaken: state.totalDamageTaken + mitigatedDamage,
-      slowMoUntil: currentTime + 70,
-      slowMoFactor: 0.22,
+      slowMoUntil: currentTime + 110,
+      slowMoFactor: 0.16,
     };
+    createPlayerHurtEffect(player.position, true);
+    recordEvent([
+      NetEventKind.PlayerHurt,
+      currentTime,
+      Math.round(player.position.x),
+      Math.round(player.position.y),
+      mitigatedDamage,
+      1, // heavy
+      0, // owner: host player
+    ]);
 
     // Floating damage number
     const dp = particlePool.acquire();
@@ -487,13 +535,23 @@ export function updateGameState(
         health: player.health - epDamage,
         invulnerableUntil: currentTime + 500,
       };
-      screenShake = Math.max(screenShake, 10);
+      screenShake = Math.max(screenShake, 16);
       state = {
         ...state,
         screenFlash: currentTime,
         screenFlashColor: '255, 45, 106',
         totalDamageTaken: state.totalDamageTaken + epDamage,
       };
+      createPlayerHurtEffect(player.position, false);
+      recordEvent([
+        NetEventKind.PlayerHurt,
+        currentTime,
+        Math.round(player.position.x),
+        Math.round(player.position.y),
+        epDamage,
+        0, // heavy
+        0, // owner: host player
+      ]);
 
       // Floating damage number
       const edp = particlePool.acquire();
@@ -509,7 +567,6 @@ export function updateGameState(
       edp.type = 'text';
       edp.text = `-${epDamage}`;
 
-      createExplosion(player.position, COLORS.pink, 12);
     }
   }
 
@@ -922,21 +979,11 @@ export function updateGameState(
   }
 
   // Update particles in-place and release dead ones
-  particlePool.forEach(p => {
-    const newLife = p.life - effectiveDelta * 16;
-    const lifeRatio = Math.max(0, newLife / p.maxLife);
-    p.position.x += p.velocity.x * effectiveDelta * 0.1;
-    p.position.y += p.velocity.y * effectiveDelta * 0.1;
-    p.velocity.x *= 0.98;
-    p.velocity.y *= 0.98;
-    p.life = newLife;
-    p.size = Math.max(0.1, p.size * lifeRatio);
-    if (p.life <= 0) return false; // release
-    return true; // keep
-  });
+  updateParticles(effectiveDelta);
 
-  // Decay screen shake
-  screenShake = Math.max(0, screenShake - deltaTime * 0.5);
+  // Decay screen shake — proportional falloff keeps small kicks snappy while
+  // letting big blasts ring out a little longer.
+  screenShake = Math.max(0, screenShake * Math.pow(0.9, deltaTime) - deltaTime * 0.35);
 
   return {
     ...state,

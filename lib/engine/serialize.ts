@@ -1,4 +1,4 @@
-import { GameState, Vector2, EnemyType, WeaponType, PowerUpType, ArenaType, WaveEventType } from '@/types/game';
+import { ParticleType, GameState, Vector2, EnemyType, WeaponType, PowerUpType, ArenaType, WaveEventType } from '@/types/game';
 
 export interface RenderState {
   player: {
@@ -39,7 +39,7 @@ export interface RenderState {
     size: number;
     life: number;
     maxLife: number;
-    type: 'explosion' | 'trail' | 'spark' | 'text' | 'ring';
+    type: ParticleType;
     text?: string;
   }>;
   particleCount: number;

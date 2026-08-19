@@ -1,4 +1,6 @@
 import PartySocket from "partysocket";
+import type { WireCommand } from "./netcode";
+import type { NetEvent } from "./engine/netEvents";
 
 const PARTYKIT_HOST = process.env.NEXT_PUBLIC_PARTYKIT_HOST || "localhost:1999";
 
@@ -20,7 +22,9 @@ export interface RoomState {
 export type MultiplayerMessage =
   | { type: "room-info"; players: MultiplayerPlayer[]; roomCode: string }
   | { type: "player-leave"; id: string }
-  | { type: "player-input"; id: string; keys: string[]; mousePos: { x: number; y: number } }
+  | { type: "input"; id: string; cmds: WireCommand[] }
+  | { type: "ping"; id: string; t: number }
+  | { type: "pong"; t: number }
   | { type: "game-state"; state: unknown; hostId: string }
   | { type: "start-game"; arena: string }
   | { type: "level-up"; availableUpgrades: { id: string; name: string; description: string; icon: string; color: string; type: string; weaponType?: string; stat?: string }[]; level: number }
@@ -61,22 +65,59 @@ interface WirePlayer {
   ab: Array<[string, number, number]>;
 }
 
-interface WireGameStateV1 {
-  __v: 1;
+/**
+ * v2 additions over v1:
+ *  - `t`   host clock time of the simulation tick this snapshot represents,
+ *          which is what makes real interpolation possible on the guest.
+ *  - `ack` last guest input sequence the host folded in, for reconciliation.
+ *  - enemy velocities, so remote motion can extrapolate through a dropped packet.
+ *  - stable numeric projectile ids, so projectiles interpolate instead of
+ *    teleporting between snapshots.
+ *  - `ev`  cosmetic events (hits/kills/blasts) the guest replays locally —
+ *          particles themselves are far too numerous to ship.
+ */
+interface WireGameStateV2 {
+  __v: 2;
+  t: number;
+  ack: number;
   p: WirePlayer;
   p2: WirePlayer | null;
   sc: number;
   wv: number;
   m: number;
-  e: Array<[string, number, number, number, number, string, number, number, string, number | null]>;
-  pr: Array<[number, number, number, number, number, number, string, 0 | 1, number]>;
+  ks: number;
+  nm: number;
+  gt: number;
+  ss: number;
+  pl: number;
+  /** Colour palette. Entities carry an index instead of a hex string — colours
+   *  repeat heavily, and at 25 snapshots/sec the duplicates were the single
+   *  largest field in the payload. */
+  cp: string[];
+  e: Array<[string, number, number, number, number, number, number, string, number, number, number | null, number, number]>;
+  pr: Array<[number, number, number, number, number, number, number, number]>;
   pw: Array<[number, number, string]>;
   xo: Array<[number, number, number]>;
+  ev: NetEvent[];
   go: 0 | 1;
   ru: 0 | 1;
+  ae?: string;
+  au?: number;
+  wa?: number;
 }
 
 type RawGameStateLike = {
+  t: number;
+  ack: number;
+  killStreak: number;
+  nearMissCount: number;
+  gameTime: number;
+  screenShake: number;
+  pendingLevelUps: number;
+  events: NetEvent[];
+  activeEvent?: string;
+  eventAnnounceTime?: number;
+  waveAnnounceTime?: number;
   player: {
     position: { x: number; y: number };
     velocity: { x: number; y: number };
@@ -112,22 +153,23 @@ type RawGameStateLike = {
   enemies: Array<{
     id: string;
     position: { x: number; y: number };
+    velocity: { x: number; y: number };
     health: number;
     maxHealth: number;
     type: string;
     radius: number;
-    damage: number;
     color: string;
     ghostAlpha?: number;
+    spawnTime: number;
+    isElite?: boolean;
   }>;
   projectiles: Array<{
+    nid: number;
     position: { x: number; y: number };
     velocity: { x: number; y: number };
-    damage: number;
     radius: number;
     color: string;
     isEnemy: boolean;
-    piercing: number;
   }>;
   powerups: Array<{ position: { x: number; y: number }; type: string }>;
   experienceOrbs: Array<{ position: { x: number; y: number }; value: number }>;
@@ -217,107 +259,186 @@ function decodePlayer(player: WirePlayer) {
 function encodeGameStateForWire(state: unknown): unknown {
   if (!isRawGameStateLike(state)) return state;
 
-  const wire: WireGameStateV1 = {
-    __v: 1,
+  const palette: string[] = [];
+  const paletteIndex = new Map<string, number>();
+  const colorId = (color: string): number => {
+    let id = paletteIndex.get(color);
+    if (id === undefined) {
+      id = palette.length;
+      palette.push(color);
+      paletteIndex.set(color, id);
+    }
+    return id;
+  };
+
+  const wire: WireGameStateV2 = {
+    __v: 2,
+    t: Math.round(state.t),
+    ack: state.ack || 0,
     p: encodePlayer(state.player),
     p2: state.player2 ? encodePlayer(state.player2) : null,
     sc: Math.round(state.score || 0),
     wv: Math.round(state.wave || 1),
     m: round2(state.multiplier || 1),
+    ks: Math.round(state.killStreak || 0),
+    nm: Math.round(state.nearMissCount || 0),
+    gt: Math.round(state.gameTime || 0),
+    ss: round1(state.screenShake || 0),
+    pl: Math.round(state.pendingLevelUps || 0),
+    cp: palette,
     e: state.enemies.map(enemy => [
       enemy.id,
-      round2(enemy.position.x),
-      round2(enemy.position.y),
+      round1(enemy.position.x),
+      round1(enemy.position.y),
+      round1(enemy.velocity?.x || 0),
+      round1(enemy.velocity?.y || 0),
       round1(enemy.health),
       round1(enemy.maxHealth),
       enemy.type,
-      round2(enemy.radius),
-      round1(enemy.damage),
-      enemy.color,
+      round1(enemy.radius),
+      colorId(enemy.color),
       enemy.ghostAlpha ?? null,
+      Math.round(enemy.spawnTime || 0),
+      enemy.isElite ? 1 : 0,
     ]),
+    // Projectiles are render-only on the guest, so damage and piercing never
+    // leave the host. They are also the highest-count entity, so every dropped
+    // field pays for itself many times over.
     pr: state.projectiles.map(projectile => [
-      round2(projectile.position.x),
-      round2(projectile.position.y),
-      round2(projectile.velocity.x),
-      round2(projectile.velocity.y),
-      round2(projectile.damage),
-      round2(projectile.radius),
-      projectile.color,
+      projectile.nid,
+      round1(projectile.position.x),
+      round1(projectile.position.y),
+      round1(projectile.velocity.x),
+      round1(projectile.velocity.y),
+      round1(projectile.radius),
+      colorId(projectile.color),
       projectile.isEnemy ? 1 : 0,
-      projectile.piercing || 0,
     ]),
     pw: state.powerups.map(powerup => [
-      round2(powerup.position.x),
-      round2(powerup.position.y),
+      round1(powerup.position.x),
+      round1(powerup.position.y),
       powerup.type,
     ]),
     xo: state.experienceOrbs.map(orb => [
-      round2(orb.position.x),
-      round2(orb.position.y),
+      round1(orb.position.x),
+      round1(orb.position.y),
       round1(orb.value),
     ]),
+    ev: state.events || [],
     go: state.isGameOver ? 1 : 0,
     ru: state.isRunning ? 1 : 0,
+    ae: state.activeEvent,
+    au: state.eventAnnounceTime,
+    wa: state.waveAnnounceTime,
   };
 
   return wire;
 }
 
-function isWireGameStateV1(state: unknown): state is WireGameStateV1 {
-  return !!state && typeof state === "object" && "__v" in state && (state as WireGameStateV1).__v === 1;
+export interface DecodedSnapshot {
+  hostTime: number;
+  ack: number;
+  player: ReturnType<typeof decodePlayer>;
+  player2: ReturnType<typeof decodePlayer> | null;
+  score: number;
+  wave: number;
+  multiplier: number;
+  killStreak: number;
+  nearMissCount: number;
+  gameTime: number;
+  screenShake: number;
+  pendingLevelUps: number;
+  enemies: Array<{
+    id: string;
+    position: { x: number; y: number };
+    velocity: { x: number; y: number };
+    health: number;
+    maxHealth: number;
+    type: string;
+    radius: number;
+    color: string;
+    ghostAlpha?: number;
+    spawnTime: number;
+    isElite: boolean;
+  }>;
+  projectiles: Array<{
+    nid: number;
+    position: { x: number; y: number };
+    velocity: { x: number; y: number };
+    radius: number;
+    color: string;
+    isEnemy: boolean;
+  }>;
+  powerups: Array<{ id: string; position: { x: number; y: number }; type: string }>;
+  experienceOrbs: Array<{ id: string; position: { x: number; y: number }; value: number }>;
+  events: NetEvent[];
+  isGameOver: boolean;
+  isRunning: boolean;
+  activeEvent?: string;
+  eventAnnounceTime?: number;
+  waveAnnounceTime?: number;
 }
 
-export function decodeGameState(state: unknown): unknown {
-  if (!isWireGameStateV1(state)) return state;
+function isWireGameStateV2(state: unknown): state is WireGameStateV2 {
+  return !!state && typeof state === "object" && (state as WireGameStateV2).__v === 2;
+}
+
+export function decodeGameState(state: unknown): DecodedSnapshot | null {
+  if (!isWireGameStateV2(state)) return null;
+
+  const palette = state.cp || [];
+  const color = (id: number) => palette[id] ?? '#ffffff';
 
   return {
+    hostTime: state.t,
+    ack: state.ack,
     player: decodePlayer(state.p),
     player2: state.p2 ? decodePlayer(state.p2) : null,
     score: state.sc,
     wave: state.wv,
     multiplier: state.m,
+    killStreak: state.ks,
+    nearMissCount: state.nm,
+    gameTime: state.gt,
+    screenShake: state.ss,
+    pendingLevelUps: state.pl,
     enemies: state.e.map(enemy => ({
-      id: enemy[0],
-      position: { x: enemy[1], y: enemy[2] },
-      velocity: { x: 0, y: 0 },
-      health: enemy[3],
-      maxHealth: enemy[4],
-      type: enemy[5],
-      radius: enemy[6],
-      damage: enemy[7],
-      color: enemy[8],
-      ghostAlpha: enemy[9] ?? undefined,
-      speed: 0,
-      points: 0,
-      spawnTime: 0,
+      id: enemy[0] as string,
+      position: { x: enemy[1] as number, y: enemy[2] as number },
+      velocity: { x: enemy[3] as number, y: enemy[4] as number },
+      health: enemy[5] as number,
+      maxHealth: enemy[6] as number,
+      type: enemy[7] as string,
+      radius: enemy[8] as number,
+      color: color(enemy[9] as number),
+      ghostAlpha: (enemy[10] as number | null) ?? undefined,
+      spawnTime: enemy[11] as number,
+      isElite: enemy[12] === 1,
     })),
-    projectiles: state.pr.map((projectile, index) => ({
-      id: `p-${index}`,
-      position: { x: projectile[0], y: projectile[1] },
-      velocity: { x: projectile[2], y: projectile[3] },
-      damage: projectile[4],
+    projectiles: state.pr.map(projectile => ({
+      nid: projectile[0],
+      position: { x: projectile[1], y: projectile[2] },
+      velocity: { x: projectile[3], y: projectile[4] },
       radius: projectile[5],
-      color: projectile[6],
+      color: color(projectile[6]),
       isEnemy: projectile[7] === 1,
-      piercing: projectile[8],
-      hitEnemies: new Set<string>(),
     })),
     powerups: state.pw.map((powerup, index) => ({
       id: `pw-${index}`,
-      position: { x: powerup[0], y: powerup[1] },
-      type: powerup[2],
-      createdAt: 0,
-      duration: 0,
+      position: { x: powerup[0] as number, y: powerup[1] as number },
+      type: powerup[2] as string,
     })),
     experienceOrbs: state.xo.map((orb, index) => ({
       id: `xo-${index}`,
       position: { x: orb[0], y: orb[1] },
       value: orb[2],
-      createdAt: 0,
     })),
+    events: state.ev || [],
     isGameOver: state.go === 1,
     isRunning: state.ru === 1,
+    activeEvent: state.ae,
+    eventAnnounceTime: state.au,
+    waveAnnounceTime: state.wa,
   };
 }
 
@@ -378,7 +499,7 @@ export function createPartySocket(
 export function joinRoom(socket: PartySocket, name: string, imageUrl: string) {
   // Store for reconnection
   storedPlayerInfo = { name, imageUrl };
-  
+
   socket.send(JSON.stringify({
     type: "player-join",
     id: socket.id,
@@ -387,38 +508,28 @@ export function joinRoom(socket: PartySocket, name: string, imageUrl: string) {
   }));
 }
 
-export function sendInput(
-  socket: PartySocket,
-  keys: string[],
-  mousePos: { x: number; y: number }
-) {
-  socket.send(JSON.stringify({
-    type: "player-input",
-    id: socket.id,
-    keys,
-    mousePos,
-  }));
+/** Guest -> host. Sends the recent unacknowledged commands for loss tolerance. */
+export function sendInputCommands(socket: PartySocket, cmds: WireCommand[]) {
+  if (cmds.length === 0) return;
+  socket.send(JSON.stringify({ type: "input", id: socket.id, cmds }));
+}
+
+export function sendPing(socket: PartySocket, t: number) {
+  socket.send(JSON.stringify({ type: "ping", id: socket.id, t }));
+}
+
+export function sendPong(socket: PartySocket, t: number) {
+  socket.send(JSON.stringify({ type: "pong", t }));
 }
 
 export function sendGameState(socket: PartySocket, state: unknown) {
   try {
     const encodedState = encodeGameStateForWire(state);
-    // Custom serializer to handle Sets (convert to arrays)
-    const serialized = JSON.stringify({
+    socket.send(JSON.stringify({
       type: "game-state",
       state: encodedState,
       hostId: socket.id,
-    }, (key, value) => {
-      if (value instanceof Set) {
-        return Array.from(value);
-      }
-      // Skip image objects (can't serialize HTMLImageElement)
-      if (key === 'image' && value && typeof value === 'object') {
-        return null;
-      }
-      return value;
-    });
-    socket.send(serialized);
+    }));
   } catch (e) {
     console.error('[HOST] Failed to serialize game state:', e);
   }

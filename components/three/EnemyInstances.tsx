@@ -7,8 +7,10 @@ import { GameState, EnemyType } from '@/types/game';
 import { getThreeColor, COLORS } from '@/lib/colors';
 
 const MAX_ENEMIES = 300;
+const HIT_FLASH_MS = 130;
 const dummyObj = new THREE.Object3D();
 const tmpColor = new THREE.Color();
+const WHITE = new THREE.Color(0xffffff);
 
 // Shape archetype geometries
 function createShapeGeometry(type: string): THREE.BufferGeometry {
@@ -171,11 +173,21 @@ export function EnemyInstances({ gameStateRef }: EnemyInstancesProps) {
           dummyObj.rotation.set(0, 0, 0);
         }
 
-        dummyObj.scale.set(r, r, 1);
+        // Hit reaction: a short white-out plus a scale punch. This is the
+        // cheapest, most legible signal that damage actually landed.
+        const sinceHit = enemy.hitFlash ? now - enemy.hitFlash : 9999;
+        const hit = sinceHit < HIT_FLASH_MS ? 1 - sinceHit / HIT_FLASH_MS : 0;
+        const punch = 1 + hit * hit * 0.28;
+
+        dummyObj.scale.set(r * punch, r * punch, 1);
         dummyObj.updateMatrix();
         mesh.setMatrixAt(i, dummyObj.matrix);
 
         tmpColor.set(enemy.color);
+        if (hit > 0) {
+          // Blend toward white and overdrive it so bloom picks the hit up.
+          tmpColor.lerp(WHITE, hit * 0.85).multiplyScalar(1 + hit * 1.4);
+        }
         mesh.setColorAt(i, tmpColor);
 
         // Spawn/charge telegraphs for dangerous enemies and elites.

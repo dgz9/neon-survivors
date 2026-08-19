@@ -86,10 +86,17 @@ export function createParticlePool(capacity = 800) {
       velocity: { x: 0, y: 0 },
       color: '',
       size: 0,
+      baseSize: 0,
       life: 0,
       maxLife: 0,
       type: 'explosion' as const,
       text: undefined,
+      drag: 0.92,
+      gravity: 0,
+      rotation: 0,
+      spin: 0,
+      fade: 1,
+      glow: 1,
     }),
     (p) => {
       p.id = '';
@@ -99,13 +106,22 @@ export function createParticlePool(capacity = 800) {
       p.velocity.y = 0;
       p.color = '';
       p.size = 0;
+      p.baseSize = 0;
       p.life = 0;
       p.maxLife = 0;
       p.type = 'explosion';
       p.text = undefined;
+      p.drag = 0.92;
+      p.gravity = 0;
+      p.rotation = 0;
+      p.spin = 0;
+      p.fade = 1;
+      p.glow = 1;
     }
   );
 }
+
+let nextProjectileNid = 1;
 
 export function createProjectilePool(capacity = 200) {
   return new ObjectPool<Projectile>(
@@ -114,6 +130,7 @@ export function createProjectilePool(capacity = 200) {
       _active: false,
       _poolIndex: 0,
       id: '',
+      nid: 0,
       position: { x: 0, y: 0 },
       velocity: { x: 0, y: 0 },
       radius: 0,
@@ -129,6 +146,9 @@ export function createProjectilePool(capacity = 200) {
     }),
     (p) => {
       p.id = '';
+      // Fresh identity on every acquire so the network layer can match a
+      // projectile across snapshots even after the pool slot is recycled.
+      p.nid = nextProjectileNid++;
       p.position.x = 0;
       p.position.y = 0;
       p.velocity.x = 0;

@@ -66,6 +66,11 @@ export interface Enemy {
   formationId?: string;
   formationRole?: string;
   formationOffset?: Vector2;
+  // Hit feedback
+  /** Timestamp of the most recent damage taken — drives the render flash. */
+  hitFlash?: number;
+  /** Decaying positional knockback applied on top of AI movement. */
+  knockback?: Vector2;
 }
 
 export type EnemyType = 'chaser' | 'shooter' | 'tank' | 'swarm' | 'bomber' | 'boss' | 'zigzag' | 'splitter' | 'ghost' | 'magnet';
@@ -74,6 +79,8 @@ export interface Projectile {
   _active: boolean;
   _poolIndex: number;
   id: string;
+  /** Compact monotonic id used for network entity matching/interpolation. */
+  nid: number;
   position: Vector2;
   velocity: Vector2;
   radius: number;
@@ -125,6 +132,16 @@ export interface ExperienceOrb {
   createdAt: number;
 }
 
+export type ParticleType =
+  | 'explosion'
+  | 'trail'
+  | 'spark'
+  | 'text'
+  | 'ring'
+  | 'shockwave'
+  | 'ember'
+  | 'flash';
+
 export interface Particle {
   _active: boolean;
   _poolIndex: number;
@@ -132,11 +149,25 @@ export interface Particle {
   position: Vector2;
   velocity: Vector2;
   color: string;
+  /** Current render size — derived from baseSize each frame, never mutated cumulatively. */
   size: number;
+  /** Size at spawn. Render size is computed from this so decay cannot compound. */
+  baseSize: number;
   life: number;
   maxLife: number;
-  type: 'explosion' | 'trail' | 'spark' | 'text' | 'ring';
+  type: ParticleType;
   text?: string;
+  /** Per-tick velocity damping (1 = no drag). */
+  drag: number;
+  /** Added to velocity.y per tick (world units). */
+  gravity: number;
+  /** Radians, for streaks/embers. */
+  rotation: number;
+  spin: number;
+  /** Alpha curve exponent — >1 holds bright then snaps out, <1 fades slowly. */
+  fade: number;
+  /** Extra brightness multiplier for additive blending. */
+  glow: number;
 }
 
 export interface Upgrade {

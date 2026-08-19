@@ -9,10 +9,20 @@ interface PlayerJoin {
 }
 
 interface PlayerInput {
-  type: "player-input";
+  type: "input";
   id: string;
-  keys: string[];
-  mousePos: { x: number; y: number };
+  cmds: [number, number, number, number][];
+}
+
+interface Ping {
+  type: "ping";
+  id: string;
+  t: number;
+}
+
+interface Pong {
+  type: "pong";
+  t: number;
 }
 
 interface GameStateSync {
@@ -65,7 +75,7 @@ interface RoomInfo {
   roomCode: string;
 }
 
-type Message = PlayerJoin | PlayerInput | GameStateSync | StartGame | LevelUp | UpgradeSelected | UpgradesComplete | GameOver;
+type Message = PlayerJoin | PlayerInput | Ping | Pong | GameStateSync | StartGame | LevelUp | UpgradeSelected | UpgradesComplete | GameOver;
 
 interface Player {
   id: string;
@@ -129,9 +139,18 @@ export default class NeonSurvivorsParty implements Party.Server {
           this.handlePlayerJoin(sender, data);
           break;
           
-        case "player-input":
-          // Forward inputs to host
+        case "input":
+          // Forward guest input commands to the host
           this.forwardToHost(message, sender.id);
+          break;
+
+        case "ping":
+          // Latency probe from the guest — the host echoes it back as a pong
+          this.forwardToHost(message, sender.id);
+          break;
+
+        case "pong":
+          this.broadcastToOthers(message, sender.id);
           break;
           
         case "game-state":

@@ -5,9 +5,11 @@ import { GameState, POWERUP_CONFIGS } from '@/types/game';
 
 interface PowerupSpritesProps {
   gameStateRef: React.RefObject<GameState | null>;
+  /** Camera zoom. World coords must be scaled to match the WebGL canvas. */
+  worldScale?: number;
 }
 
-export function PowerupSprites({ gameStateRef }: PowerupSpritesProps) {
+export function PowerupSprites({ gameStateRef, worldScale = 1 }: PowerupSpritesProps) {
   const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -54,7 +56,15 @@ export function PowerupSprites({ gameStateRef }: PowerupSpritesProps) {
     <div
       ref={containerRef}
       className="absolute inset-0 pointer-events-none overflow-hidden"
-      style={{ zIndex: 11 }}
+      style={{
+        zIndex: 11,
+        // Matches the orthographic camera zoom so overlay sprites land on the
+        // same pixels as the entities they belong to.
+        transform: worldScale === 1 ? undefined : `scale(${worldScale})`,
+        transformOrigin: '0 0',
+        width: worldScale === 1 ? undefined : `${100 / worldScale}%`,
+        height: worldScale === 1 ? undefined : `${100 / worldScale}%`,
+      }}
     />
   );
 }

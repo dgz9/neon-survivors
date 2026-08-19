@@ -27,6 +27,11 @@ export function releaseXPOrb(orb: ExperienceOrb): void {
 export function getXPOrbCount(): number {
   return xpOrbPool.activeCount;
 }
+export function getParticleCount(): number {
+  return particlePool.activeCount;
+}
 
+// Short base-36 ids: entity ids ride in every multiplayer snapshot, so keeping
+// them a few characters long meaningfully shrinks the wire payload.
 let nextId = 0;
-export const generateId = () => `id-${nextId++}-${Math.random().toString(36).substr(2, 9)}`;
+export const generateId = () => (nextId++).toString(36);
