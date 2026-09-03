@@ -163,12 +163,18 @@ export default function Lobby({
           </div>
 
           <div className="space-y-3">
+            {/* Without these, mobile keyboards autocorrect and offer suggestions
+                over a four-character room code. */}
             <input
               type="text"
               value={joinCode}
               onChange={(e) => setJoinCode(e.target.value.toUpperCase().slice(0, 4))}
               placeholder="ENTER CODE"
               maxLength={4}
+              autoCapitalize="characters"
+              autoCorrect="off"
+              autoComplete="off"
+              spellCheck={false}
               className="w-full bg-brutal-dark border-2 border-white/20 focus:border-electric-pink px-4 py-3 font-mono text-2xl text-center tracking-[0.5em] text-white placeholder-white/30 outline-none transition-colors uppercase"
             />
             <button

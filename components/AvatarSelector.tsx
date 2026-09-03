@@ -96,6 +96,9 @@ export default function AvatarSelector({ onSelect, buttonText = '// START GAME' 
           onChange={(e) => setPlayerName(e.target.value)}
           placeholder="Your name for the leaderboard..."
           maxLength={20}
+          autoComplete="off"
+          autoCorrect="off"
+          spellCheck={false}
           className="w-full bg-brutal-dark border-2 border-white/20 focus:border-electric-cyan px-4 py-3 font-mono text-white placeholder-white/30 outline-none transition-colors"
         />
       </div>
@@ -109,12 +112,12 @@ export default function AvatarSelector({ onSelect, buttonText = '// START GAME' 
         </div>
 
         {/* Preset avatars */}
-        <div className="grid grid-cols-6 gap-3 mb-6">
+        <div className="grid grid-cols-4 sm:grid-cols-6 gap-2 sm:gap-3 mb-6">
           {PRESET_AVATARS.map((avatar) => (
             <button
               key={avatar.id}
               onClick={() => handleAvatarSelect(avatar.id)}
-              className={`aspect-square flex items-center justify-center text-4xl border-2 transition-all ${
+              className={`aspect-square flex items-center justify-center text-3xl sm:text-4xl border-2 transition-all ${
                 selectedAvatar === avatar.id
                   ? 'border-electric-cyan bg-electric-cyan/10 scale-110'
                   : 'border-white/20 hover:border-white/40 bg-brutal-dark'
@@ -126,7 +129,7 @@ export default function AvatarSelector({ onSelect, buttonText = '// START GAME' 
         </div>
 
         {/* Upload custom */}
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-3 sm:gap-4">
           <input
             ref={fileInputRef}
             type="file"
@@ -136,13 +139,13 @@ export default function AvatarSelector({ onSelect, buttonText = '// START GAME' 
           />
           <button
             onClick={() => fileInputRef.current?.click()}
-            className="flex-1 border-2 border-dashed border-white/20 hover:border-electric-pink py-4 font-mono text-sm text-white/60 hover:text-electric-pink transition-colors"
+            className="flex-1 min-w-0 border-2 border-dashed border-white/20 hover:border-electric-pink py-4 px-2 font-mono text-xs sm:text-sm text-white/60 hover:text-electric-pink transition-colors"
           >
             + Upload Custom Image
           </button>
           
           {customImage && (
-            <div className="w-16 h-16 border-2 border-electric-cyan overflow-hidden">
+            <div className="w-16 h-16 shrink-0 border-2 border-electric-cyan overflow-hidden">
               <Image src={customImage} alt="Custom" width={64} height={64} className="w-full h-full object-cover" unoptimized />
             </div>
           )}
@@ -154,7 +157,7 @@ export default function AvatarSelector({ onSelect, buttonText = '// START GAME' 
         <button
           onClick={handleStart}
           disabled={!isReady}
-          className={`w-full py-4 font-menu text-2xl uppercase tracking-wider transition-all ${
+          className={`w-full py-4 px-3 font-menu text-lg sm:text-2xl uppercase tracking-wider transition-all ${
             isReady
               ? 'bg-electric-cyan text-brutal-black hover:bg-white'
               : 'bg-white/10 text-white/30 cursor-not-allowed'

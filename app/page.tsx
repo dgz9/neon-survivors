@@ -36,6 +36,7 @@ export default function Home() {
   const [selectedArena, setSelectedArena] = useState<'void' | 'grid' | 'cyber' | 'neon'>('grid');
   const [showLeaderboard, setShowLeaderboard] = useState(false);
   const [soundEnabled, setSoundEnabled] = useState(() => !isMuted());
+  const [isTouch, setIsTouch] = useState(false);
   
   // Co-op state
   const [coopSocket, setCoopSocket] = useState<PartySocket | null>(null);
@@ -44,6 +45,18 @@ export default function Home() {
 
   useEffect(() => {
     setSoundEnabled(!isMuted());
+  }, []);
+
+  // Drives the how-to-play copy: a coarse pointer means the player will be using
+  // the on-screen sticks, not a keyboard.
+  useEffect(() => {
+    const query = window.matchMedia?.('(pointer: coarse)');
+    const evaluate = () =>
+      setIsTouch(query ? query.matches : 'ontouchstart' in window || navigator.maxTouchPoints > 0);
+
+    evaluate();
+    query?.addEventListener('change', evaluate);
+    return () => query?.removeEventListener('change', evaluate);
   }, []);
 
   useEffect(() => {
@@ -164,7 +177,7 @@ export default function Home() {
               <span className="font-mono text-xs text-white/40 uppercase tracking-wider">Game Mode</span>
             </div>
             
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
               <button
                 onClick={() => setGameMode('solo')}
                 className={`p-4 border-2 transition-all flex items-center gap-3 ${
@@ -215,7 +228,7 @@ export default function Home() {
               <span className="font-mono text-xs text-white/40 uppercase tracking-wider">Select Arena</span>
             </div>
             
-            <div className="grid grid-cols-4 gap-3">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
               {[
                 { id: 'void', name: 'Void', desc: 'Empty space', color: 'white' },
                 { id: 'grid', name: 'Grid', desc: 'Classic neon', color: 'yellow' },
@@ -259,16 +272,16 @@ export default function Home() {
               <span className="font-mono text-xs text-white/40 uppercase tracking-wider">How To Play</span>
             </div>
 
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-center">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4 text-center">
               <div className="p-4 border border-white/10 bg-brutal-dark">
-                <div className="text-2xl mb-2">⌨️</div>
-                <div className="font-mono text-xs text-white/60">WASD / Arrows</div>
+                <div className="text-2xl mb-2">{isTouch ? '👍' : '⌨️'}</div>
+                <div className="font-mono text-xs text-white/60">{isTouch ? 'Left thumb' : 'WASD / Arrows'}</div>
                 <div className="font-mono text-[10px] text-white/30">Move</div>
               </div>
               <div className="p-4 border border-white/10 bg-brutal-dark">
-                <div className="text-2xl mb-2">🖱️</div>
-                <div className="font-mono text-xs text-white/60">Mouse</div>
-                <div className="font-mono text-[10px] text-white/30">Aim</div>
+                <div className="text-2xl mb-2">{isTouch ? '🎯' : '🖱️'}</div>
+                <div className="font-mono text-xs text-white/60">{isTouch ? 'Right thumb' : 'Mouse'}</div>
+                <div className="font-mono text-[10px] text-white/30">{isTouch ? 'Aim (auto otherwise)' : 'Aim'}</div>
               </div>
               <div className="p-4 border border-white/10 bg-brutal-dark">
                 <div className="text-2xl mb-2">⚡</div>
@@ -281,13 +294,6 @@ export default function Home() {
                 <div className="font-mono text-[10px] text-white/30">Level up</div>
               </div>
             </div>
-
-            {/* Mobile controls hint */}
-            <div className="mt-4 p-3 border border-electric-cyan/20 bg-brutal-dark text-center sm:hidden">
-              <div className="text-lg mb-1">📱</div>
-              <div className="font-mono text-xs text-electric-cyan">Touch Controls</div>
-              <div className="font-mono text-[10px] text-white/40">Left thumb = move &bull; Right thumb = aim &bull; Auto-fire</div>
-            </div>
           </div>
 
           {/* Powerups Reference */}
@@ -298,7 +304,7 @@ export default function Home() {
               <span className="font-mono text-xs text-white/40 uppercase tracking-wider">Powerups</span>
             </div>
 
-            <div className="grid grid-cols-2 sm:grid-cols-6 gap-3">
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-3">
               {[
                 { icon: '❤', name: 'Health', desc: '+25 HP', color: 'text-green-400', border: 'border-green-400/30' },
                 { icon: '⚡', name: 'Speed', desc: '1.5x speed (10s)', color: 'text-yellow-300', border: 'border-yellow-300/30' },

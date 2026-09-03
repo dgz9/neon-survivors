@@ -7,6 +7,9 @@ import { GameState, ArenaType } from '@/types/game';
 
 interface ArenaBackgroundProps {
   gameStateRef: React.RefObject<GameState | null>;
+  /** Camera zoom. Below 1 the camera shows more world than the canvas has CSS
+   *  pixels, so the backdrop has to be inflated to match or it stops short. */
+  worldScale?: number;
 }
 
 const vertexShader = `
@@ -146,7 +149,7 @@ const fragmentShaders: Record<ArenaType, string> = {
   `,
 };
 
-export function ArenaBackground({ gameStateRef }: ArenaBackgroundProps) {
+export function ArenaBackground({ gameStateRef, worldScale = 1 }: ArenaBackgroundProps) {
   const meshRef = useRef<THREE.Mesh>(null);
   const materialRef = useRef<THREE.ShaderMaterial>(null);
 
@@ -163,12 +166,17 @@ export function ArenaBackground({ gameStateRef }: ArenaBackgroundProps) {
     const state = gameStateRef.current;
     if (!state || !materialRef.current) return;
 
+    // World units visible on screen, which on mobile is more than the canvas is
+    // wide because the camera is zoomed out.
+    const worldWidth = size.width / worldScale;
+    const worldHeight = size.height / worldScale;
+
     uniforms.uTime.value = clock.elapsedTime * 1000;
-    uniforms.uResolution.value.set(size.width, size.height);
+    uniforms.uResolution.value.set(worldWidth, worldHeight);
     const bombPulseAgeMs = state.bombPulseAt ? Date.now() - state.bombPulseAt : Infinity;
     if (bombPulseAgeMs <= 1900) {
       const bombPos = state.bombPulseOrigin || state.player.position;
-      uniforms.uBombCenter.value.set(bombPos.x, size.height - bombPos.y);
+      uniforms.uBombCenter.value.set(bombPos.x, worldHeight - bombPos.y);
       uniforms.uBombPulse.value = bombPulseAgeMs / 1000;
     } else {
       uniforms.uBombPulse.value = 0;
@@ -182,8 +190,8 @@ export function ArenaBackground({ gameStateRef }: ArenaBackgroundProps) {
     }
 
     if (meshRef.current) {
-      meshRef.current.scale.set(size.width, size.height, 1);
-      meshRef.current.position.set(size.width / 2, -size.height / 2, 0);
+      meshRef.current.scale.set(worldWidth, worldHeight, 1);
+      meshRef.current.position.set(worldWidth / 2, -worldHeight / 2, 0);
     }
   });
 
