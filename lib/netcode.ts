@@ -132,40 +132,51 @@ export class CommandBuffer {
 
 /** Shallowest jitter buffer the host will hold, in commands (~17ms each). */
 const MIN_BUFFER = 2;
-/** Deepest it will grow to. Beyond this the link is broken, not jittery. */
-const MAX_BUFFER = 12;
-/** Clean ticks before the buffer gives a command's worth of slack back. */
-const SHRINK_TICKS = 240;
-/** Hardest catch-up allowed, as a fraction of an extra command per tick. */
-const MAX_CATCHUP_RATE = 0.3;
+/** Deepest. Every command of slack is another 17ms of lag for P2 on P1's screen. */
+const MAX_BUFFER = 6;
+/** How often the buffer depth is reconsidered. */
+const WINDOW_TICKS = 120;
+/** Ticks of missing input P2 coasts on before easing to a stop. */
+const COAST_TICKS = 10;
+/** Ticks the coast fades out over, once the grace period is spent. */
+const EASE_TICKS = 20;
+/** Hardest catch-up allowed, as a fraction of a command per tick. */
+const MAX_CATCHUP_RATE = 0.25;
 /** How much of the surplus is converted into catch-up, per command per tick. */
-const CATCHUP_GAIN = 0.04;
+const CATCHUP_GAIN = 0.05;
 
 /**
  * Host-side jitter buffer for the guest's input.
  *
- * The rule this now follows is that the guest's avatar on the host is a pure
- * function of the command stream: every command is applied exactly once, in
- * order, and nothing else ever moves it. That is what makes the guest's
- * prediction land on the host's answer instead of near it. The old queue broke
- * the rule at both ends — it discarded two or three commands in a tick to burn
- * down a backlog, and it re-applied the last command forever when it ran dry —
- * so the two sides disagreed constantly and the guest spent the whole match
- * being dragged back into line.
+ * P2's motion on P1's screen must not depend on input arriving on time, because
+ * it routinely doesn't: packets are late or lost, and a guest whose frame rate
+ * drops below about 12fps produces fewer commands per second than the host
+ * consumes, because the simulation's spiral-of-death guard caps how many ticks
+ * one frame may generate. So a tick with nothing queued coasts on the last
+ * direction rather than standing still, and only fades to a stop once the guest
+ * has been quiet long enough that it has plainly stopped talking — which is
+ * also what stops a disconnected P2 sprinting into a wall.
  *
- * Timing is absorbed by the buffer instead. A tick with nothing queued simply
- * doesn't advance the avatar, a surplus is spent by stepping twice on the odd
- * tick, and the depth the buffer aims for grows whenever it runs dry and eases
- * back down over a few clean seconds.
+ * Latency is spent down the other way. Draining a backlog by discarding two or
+ * three commands inside one tick threw away input the guest had predicted on,
+ * so the guest spent the match being dragged back into line; the surplus is now
+ * skimmed a quarter of a command per tick at most, and the depth the buffer
+ * aims for adapts — deeper after a gap, shallower over a couple of clean
+ * seconds — so a good link keeps its input and a bad one keeps its smoothness.
  */
 export class CommandQueue {
   private queue: InputCommand[] = [];
   private lastAccepted = 0;
   private lastApplied: InputCommand = { seq: 0, dx: 0, dy: 0, aim: 0 };
   private target = MIN_BUFFER;
-  private cleanTicks = 0;
-  /** Fractional extra command owed to catch-up, spent one at a time. */
+  private coastTicks = 0;
+  /** Coast ticks seen in the current window, which decides the buffer depth. */
+  private coastsInWindow = 0;
+  private windowTicks = 0;
+  /** Fractional command owed to catch-up, spent one whole command at a time. */
   private catchUp = 0;
+  /** Reused so coasting allocates nothing per tick. */
+  private readonly coasted: InputCommand = { seq: 0, dx: 0, dy: 0, aim: 0 };
 
   /** Ignores duplicates from the redundant sends. */
   push(commands: InputCommand[]): void {
@@ -179,55 +190,53 @@ export class CommandQueue {
   }
 
   /**
-   * How many movement steps to run for the guest's avatar this tick: 0 while
-   * waiting on a late packet, 2 while spending down a surplus, 1 otherwise.
-   * Call once per tick, then call `next()` that many times.
+   * The command to advance the guest's avatar with this tick. Always returns
+   * something to move on: a real command when one has arrived, otherwise a
+   * fading echo of the last one.
    */
-  stepsThisTick(): number {
-    if (this.queue.length === 0) {
-      // Ran dry: hold still for this tick rather than invent motion, and carry
-      // a little more slack so the next gap is covered.
-      if (this.target < MAX_BUFFER) this.target++;
-      this.cleanTicks = 0;
-      this.catchUp = 0;
-      return 0;
-    }
-
-    this.cleanTicks++;
-    if (this.cleanTicks >= SHRINK_TICKS && this.target > MIN_BUFFER) {
-      this.cleanTicks = 0;
-      this.target--;
+  next(): InputCommand {
+    this.windowTicks++;
+    if (this.windowTicks >= WINDOW_TICKS) {
+      // Nothing ran dry for a whole window, so the slack is not being used.
+      if (this.coastsInWindow === 0 && this.target > MIN_BUFFER) this.target--;
+      this.windowTicks = 0;
+      this.coastsInWindow = 0;
     }
 
     const surplus = this.queue.length - this.target;
     if (surplus > 0) {
       this.catchUp += Math.min(MAX_CATCHUP_RATE, surplus * CATCHUP_GAIN);
+      if (this.catchUp >= 1 && this.queue.length > 1) {
+        this.catchUp -= 1;
+        const skipped = this.queue.shift();
+        if (skipped) this.lastApplied = skipped;
+      }
     } else {
       this.catchUp = 0;
     }
 
-    if (this.catchUp >= 1 && this.queue.length >= 2) {
-      this.catchUp -= 1;
-      return 2;
-    }
-    return 1;
-  }
-
-  /** Pops the next command. Only valid within the budget `stepsThisTick` gave. */
-  next(): InputCommand {
     const cmd = this.queue.shift();
-    if (cmd) this.lastApplied = cmd;
-    return this.lastApplied;
-  }
+    if (cmd) {
+      this.lastApplied = cmd;
+      this.coastTicks = 0;
+      return cmd;
+    }
 
-  /** Aim from the most recent command, held through a gap in the stream. */
-  get lastAim(): number {
-    return this.lastApplied.aim;
-  }
+    // Nothing arrived. Keep going the way the guest last asked to — it is far
+    // more likely still holding that direction than to have stopped dead — and
+    // carry more slack so the next gap is covered.
+    this.coastTicks++;
+    this.coastsInWindow++;
+    if (this.target < MAX_BUFFER) this.target++;
 
-  /** Commands of slack the buffer is currently carrying. */
-  get bufferTarget(): number {
-    return this.target;
+    const fade = this.coastTicks <= COAST_TICKS
+      ? 1
+      : Math.max(0, 1 - (this.coastTicks - COAST_TICKS) / EASE_TICKS);
+    this.coasted.seq = this.lastApplied.seq;
+    this.coasted.dx = this.lastApplied.dx * fade;
+    this.coasted.dy = this.lastApplied.dy * fade;
+    this.coasted.aim = this.lastApplied.aim;
+    return this.coasted;
   }
 
   get ackSeq(): number {
@@ -239,7 +248,9 @@ export class CommandQueue {
     this.lastAccepted = 0;
     this.lastApplied = { seq: 0, dx: 0, dy: 0, aim: 0 };
     this.target = MIN_BUFFER;
-    this.cleanTicks = 0;
+    this.coastTicks = 0;
+    this.coastsInWindow = 0;
+    this.windowTicks = 0;
     this.catchUp = 0;
   }
 }
