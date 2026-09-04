@@ -80,6 +80,10 @@ interface WireGameStateV2 {
   __v: 2;
   t: number;
   ack: number;
+  /** Host world size. The host owns the arena's dimensions; without them a
+   *  guest on a differently shaped screen renders a different world. */
+  ww: number;
+  wh: number;
   p: WirePlayer;
   p2: WirePlayer | null;
   sc: number;
@@ -109,6 +113,8 @@ interface WireGameStateV2 {
 type RawGameStateLike = {
   t: number;
   ack: number;
+  worldWidth: number;
+  worldHeight: number;
   killStreak: number;
   nearMissCount: number;
   gameTime: number;
@@ -275,6 +281,8 @@ function encodeGameStateForWire(state: unknown): unknown {
     __v: 2,
     t: Math.round(state.t),
     ack: state.ack || 0,
+    ww: Math.round(state.worldWidth),
+    wh: Math.round(state.worldHeight),
     p: encodePlayer(state.player),
     p2: state.player2 ? encodePlayer(state.player2) : null,
     sc: Math.round(state.score || 0),
@@ -338,6 +346,8 @@ function encodeGameStateForWire(state: unknown): unknown {
 export interface DecodedSnapshot {
   hostTime: number;
   ack: number;
+  worldWidth: number;
+  worldHeight: number;
   player: ReturnType<typeof decodePlayer>;
   player2: ReturnType<typeof decodePlayer> | null;
   score: number;
@@ -392,6 +402,8 @@ export function decodeGameState(state: unknown): DecodedSnapshot | null {
   return {
     hostTime: state.t,
     ack: state.ack,
+    worldWidth: state.ww,
+    worldHeight: state.wh,
     player: decodePlayer(state.p),
     player2: state.p2 ? decodePlayer(state.p2) : null,
     score: state.sc,

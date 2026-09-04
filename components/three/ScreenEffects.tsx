@@ -4,12 +4,14 @@ import { useRef, useMemo } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
 import { GameState } from '@/types/game';
+import { ViewTransform } from '@/lib/viewport';
 
 interface ScreenEffectsProps {
   gameStateRef: React.RefObject<GameState | null>;
+  viewRef: React.RefObject<ViewTransform>;
 }
 
-export function ScreenEffects({ gameStateRef }: ScreenEffectsProps) {
+export function ScreenEffects({ gameStateRef, viewRef }: ScreenEffectsProps) {
   const flashRef = useRef<THREE.Mesh>(null);
   const shakeTimeRef = useRef(0);
   const shakeOffsetRef = useRef(new THREE.Vector2(0, 0));
@@ -66,9 +68,16 @@ export function ScreenEffects({ gameStateRef }: ScreenEffectsProps) {
         flashMat.color.setRGB(parts[0] / 255, parts[1] / 255, parts[2] / 255);
         flashMat.opacity = flashAlpha * 0.3;
         flashRef.current.visible = true;
-        flashRef.current.position.set(size.width / 2, -size.height / 2, 8);
+        // Anchored to the middle of the canvas, not the middle of the world:
+        // in co-op the two are different whenever the arena is letterboxed.
+        const view = viewRef.current;
+        const halfW = view ? view.worldWidth / 2 : size.width / 2;
+        const halfH = view ? view.worldHeight / 2 : size.height / 2;
+        const visibleW = view ? size.width / view.scale : size.width;
+        const visibleH = view ? size.height / view.scale : size.height;
+        flashRef.current.position.set(halfW, -halfH, 8);
         // Oversized so camera shake can never expose an unpainted edge.
-        flashRef.current.scale.set(size.width * 2, size.height * 2, 1);
+        flashRef.current.scale.set(visibleW * 2, visibleH * 2, 1);
       } else {
         flashRef.current.visible = false;
       }

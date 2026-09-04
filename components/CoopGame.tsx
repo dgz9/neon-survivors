@@ -23,6 +23,8 @@ import {
   createPlayerHurtEffect,
   recordEvent,
   NetEventKind,
+  createAimState,
+  resolveTouchAim,
 } from '@/lib/gameEngine';
 import { FIXED_DT, createAccumulator, advanceAccumulator, AccumulatorState } from '@/lib/engine/timestep';
 import { Upgrade } from '@/types/game';
@@ -46,6 +48,7 @@ import {
   InputCommand,
 } from '@/lib/netcode';
 import { CoopGuestWorld } from '@/lib/coopGuestWorld';
+import { ViewTransform, createViewTransform, fitViewTransform } from '@/lib/viewport';
 import { playLevelUp, playDamage, playWaveComplete, playExplosion, setMuted, isMuted, startMatchMusic, stopMatchMusic } from '@/lib/audio';
 import { CoopGameScene } from './three/CoopGameScene';
 import { CoopOverlay } from './three/CoopOverlay';
@@ -248,6 +251,10 @@ export default function CoopGame({
   const [inputDetected, setInputDetected] = useState(false);
   const touchMovementRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
   const touchAimRef = useRef<{ x: number; y: number } | null>(null);
+  /** Remembers the touch facing so releasing both sticks holds it. */
+  const aimStateRef = useRef(createAimState());
+  /** Reused every frame — the movement vector handed to the engine. */
+  const moveScratchRef = useRef<Vector2>({ x: 0, y: 0 });
   const gamepadIndexRef = useRef<number | null>(null);
   const lastPausePress = useRef<number>(0);
   const lastWaveRef = useRef<number>(1);
@@ -267,6 +274,46 @@ export default function CoopGame({
   const mobileScale = isTouchDevice ? 0.7 : 1;
   const mobileScaleRef = useRef(mobileScale);
   mobileScaleRef.current = mobileScale;
+
+  /** Arena size in world units, and the world-to-canvas mapping built from it. */
+  const worldRef = useRef({ width: 800, height: 600 });
+  const viewRef = useRef<ViewTransform>(createViewTransform());
+
+  /**
+   * Recomputes the arena size and the mapping that draws it.
+   *
+   * The host sizes the arena to its own screen; the guest adopts the host's
+   * size and letterboxes it into whatever screen it has. Both players are then
+   * looking at the same arena, which is the whole point — sizing each client's
+   * world from its own viewport put them in different coordinate spaces, so
+   * entities landed off-screen for the guest and its avatar fought the host
+   * over where the walls were.
+   */
+  const syncView = useCallback(() => {
+    const dims = dimensionsRef.current;
+    const world = worldRef.current;
+    if (dims.width <= 0 || dims.height <= 0) return world;
+
+    const scale = mobileScaleRef.current;
+    const hostWidth = isHost ? 0 : guestWorldRef.current.worldWidth;
+    const hostHeight = isHost ? 0 : guestWorldRef.current.worldHeight;
+
+    if (hostWidth > 0 && hostHeight > 0) {
+      world.width = hostWidth;
+      world.height = hostHeight;
+    } else {
+      // Host, or a guest that has not heard from one yet.
+      world.width = Math.floor(dims.width / scale);
+      world.height = Math.floor(dims.height / scale);
+    }
+
+    fitViewTransform(viewRef.current, dims.width, dims.height, world.width, world.height);
+    return world;
+  }, [isHost]);
+
+  // Keep the mapping correct before the first simulated frame, and after every
+  // resize or rotation.
+  useEffect(() => { syncView(); }, [syncView, dimensions, mobileScale]);
   const myPlayer = players.find(p => p.id === socket.id);
   const otherPlayer = players.find(p => p.id !== socket.id);
 
@@ -394,11 +441,10 @@ export default function CoopGame({
 
   // Initialize game (only once)
   const initGame = useCallback(async () => {
-    const dims = dimensionsRef.current;
-    // Use effective dimensions (larger on mobile) so game fills the zoomed-out camera view
-    const scale = mobileScaleRef.current;
-    const effectiveWidth = Math.floor(dims.width / scale);
-    const effectiveHeight = Math.floor(dims.height / scale);
+    // The arena the host owns, letterboxed into whatever screen this client has.
+    const world = syncView();
+    const effectiveWidth = world.width;
+    const effectiveHeight = world.height;
     if (!isHost) {
       // Only the host records cosmetic events; the guest replays them.
       setEventRecording(false);
@@ -502,7 +548,7 @@ export default function CoopGame({
     state = startGame(state);
     gameStateRef.current = state;
     setIsLoading(false);
-  }, [isHost, myPlayer, otherPlayer, arena]);
+  }, [isHost, myPlayer, otherPlayer, arena, syncView]);
 
   useEffect(() => {
     if (!inputDetected || gameInitializedRef.current) return;
@@ -629,15 +675,14 @@ export default function CoopGame({
 
     const handleMouseMove = (e: MouseEvent) => {
       const el = gameAreaRef.current;
-      if (el) {
-        const rect = el.getBoundingClientRect();
-        // Convert to world coordinates — the canvas is zoomed out on mobile.
-        const scale = mobileScaleRef.current;
-        inputRef.current.mousePos = {
-          x: (e.clientX - rect.left) / scale,
-          y: (e.clientY - rect.top) / scale,
-        };
-      }
+      if (!el) return;
+      const rect = el.getBoundingClientRect();
+      // Undo the same zoom and letterbox offset the renderer applies.
+      const view = viewRef.current;
+      inputRef.current.mousePos = {
+        x: (e.clientX - rect.left - view.offsetX) / view.scale,
+        y: (e.clientY - rect.top - view.offsetY) / view.scale,
+      };
     };
 
     const handleGamepadConnected = (e: GamepadEvent) => {
@@ -764,10 +809,11 @@ export default function CoopGame({
     const gameLoop = (timestamp: number) => {
       const frameDelta = Math.min((timestamp - lastTimeRef.current) / 16.67, 3);
       lastTimeRef.current = timestamp;
-      const dims = dimensionsRef.current;
-      const scale = mobileScaleRef.current;
-      const effectiveWidth = Math.floor(dims.width / scale);
-      const effectiveHeight = Math.floor(dims.height / scale);
+      // Re-read every frame: the host can rotate its device, and the guest
+      // follows whatever arena the latest snapshot describes.
+      const world = syncView();
+      const effectiveWidth = world.width;
+      const effectiveHeight = world.height;
       const nowMs = Date.now();
 
       if (!accRef.current) accRef.current = createAccumulator(timestamp);
@@ -828,44 +874,22 @@ export default function CoopGame({
       }
 
       // Feed the shared movement path used by the single-player engine.
-      inputRef.current.touchMovement = (moveX !== 0 || moveY !== 0) ? { x: moveX, y: moveY } : undefined;
+      const move = moveScratchRef.current;
+      move.x = moveX;
+      move.y = moveY;
+      inputRef.current.touchMovement = (moveX !== 0 || moveY !== 0) ? move : undefined;
 
-      // Aim: right stick > touch aim stick > mouse > nearest enemy.
+      // Aim: gamepad right stick and mouse have already written mousePos above.
+      // On touch the aim stick points the gun, and with it idle the player
+      // shoots the way they are walking — nothing targets an enemy for them.
       if (isTouchDevice && localPlayer) {
-        const ta = touchAimRef.current;
-        if (ta) {
-          inputRef.current.mousePos = {
-            x: localPlayer.position.x + ta.x,
-            y: localPlayer.position.y + ta.y,
-          };
-        } else {
-          const enemies = gameStateRef.current?.enemies || [];
-          let nearestDistSq = Infinity;
-          let nearestPos: Vector2 | null = null;
-          for (let i = 0; i < enemies.length; i++) {
-            const e = enemies[i];
-            const dx = e.position.x - localPlayer.position.x;
-            const dy = e.position.y - localPlayer.position.y;
-            const d = dx * dx + dy * dy;
-            if (d < nearestDistSq) {
-              nearestDistSq = d;
-              nearestPos = e.position;
-            }
-          }
-          if (nearestPos) {
-            inputRef.current.mousePos = { x: nearestPos.x, y: nearestPos.y };
-          } else if (moveX !== 0 || moveY !== 0) {
-            inputRef.current.mousePos = {
-              x: localPlayer.position.x + moveX * 200,
-              y: localPlayer.position.y + moveY * 200,
-            };
-          } else {
-            inputRef.current.mousePos = {
-              x: localPlayer.position.x + 200,
-              y: localPlayer.position.y,
-            };
-          }
-        }
+        resolveTouchAim(
+          aimStateRef.current,
+          localPlayer.position,
+          touchAimRef.current,
+          move,
+          inputRef.current.mousePos,
+        );
       }
 
       const canAct = !isPaused && !showUpgrades;
@@ -1215,6 +1239,7 @@ export default function CoopGame({
     function sendSnapshot(timestamp: number) {
       const gs = gameStateRef.current;
       if (!gs) return;
+      const arenaSize = worldRef.current;
 
       const prunedEnemies = gs.enemies.map(e => ({
         id: e.id,
@@ -1304,6 +1329,10 @@ export default function CoopGame({
         // the event timeline and its own clock.
         t: performance.timeOrigin + timestamp,
         ack: commandQueueRef.current.ackSeq,
+        // The guest has no way to know how big the host's arena is, and gets
+        // its own bounds and camera from these.
+        worldWidth: arenaSize.width,
+        worldHeight: arenaSize.height,
         player: prunedPlayer,
         player2: prunedPlayer2,
         score: gs.score,
@@ -1424,7 +1453,7 @@ export default function CoopGame({
     animationFrameRef.current = requestAnimationFrame(gameLoop);
 
     return () => { cancelAnimationFrame(animationFrameRef.current); };
-  }, [isLoading, isPaused, showUpgrades, isHost, socket, players, finishGameOver, flushGuestInput, isTouchDevice, publishDisplayState]);
+  }, [isLoading, isPaused, showUpgrades, isHost, socket, players, finishGameOver, flushGuestInput, isTouchDevice, publishDisplayState, syncView]);
 
   return (
     <div className={`fixed inset-0 bg-brutal-black flex flex-col ${isTouchDevice ? 'game-touch-area safe-area-top safe-area-bottom safe-area-x' : ''}`}>
@@ -1574,7 +1603,7 @@ export default function CoopGame({
               player2Image={p2ImageRef.current}
               localPredictedProjectilesRef={localPredictedProjectilesRef}
               isHost={isHost}
-              mobileScale={mobileScale}
+              viewRef={viewRef}
             />
           </Canvas>
         )}
@@ -1592,9 +1621,9 @@ export default function CoopGame({
         )}
 
         {/* DOM overlays */}
-        <TextParticles gameStateRef={gameStateRef} worldScale={mobileScale} />
-        <PowerupSprites gameStateRef={gameStateRef} worldScale={mobileScale} />
-        <CoopOverlay gameStateRef={gameStateRef} worldScale={mobileScale} />
+        <TextParticles gameStateRef={gameStateRef} viewRef={viewRef} />
+        <PowerupSprites gameStateRef={gameStateRef} viewRef={viewRef} />
+        <CoopOverlay gameStateRef={gameStateRef} viewRef={viewRef} />
         <HUD displayState={displayState ? {
           score: displayState.score,
           wave: displayState.wave,

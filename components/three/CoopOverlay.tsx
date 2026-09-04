@@ -2,14 +2,26 @@
 
 import { useEffect, useRef } from 'react';
 import { GameState } from '@/types/game';
+import { ViewTransform } from '@/lib/viewport';
 
 interface CoopOverlayProps {
   gameStateRef: React.RefObject<GameState | null>;
-  /** Camera zoom. World coords must be scaled to match the WebGL canvas. */
-  worldScale?: number;
+  /** World-to-canvas mapping, so overlay children land on the same
+   *  pixels as the entities they belong to. */
+  viewRef: React.RefObject<ViewTransform>;
 }
 
-export function CoopOverlay({ gameStateRef, worldScale = 1 }: CoopOverlayProps) {
+/** Keeps the overlay's world-coordinate box aligned with the WebGL canvas. */
+function applyView(container: HTMLElement, view: ViewTransform | null): void {
+  if (!view) return;
+  container.style.transformOrigin = '0 0';
+  container.style.transform =
+    `translate(${view.offsetX}px, ${view.offsetY}px) scale(${view.scale})`;
+  container.style.width = `${view.worldWidth}px`;
+  container.style.height = `${view.worldHeight}px`;
+}
+
+export function CoopOverlay({ gameStateRef, viewRef }: CoopOverlayProps) {
   const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -24,6 +36,7 @@ export function CoopOverlay({ gameStateRef, worldScale = 1 }: CoopOverlayProps) 
         if (container) container.innerHTML = '';
         return;
       }
+      applyView(container, viewRef.current);
 
       let html = '';
 
@@ -50,21 +63,13 @@ export function CoopOverlay({ gameStateRef, worldScale = 1 }: CoopOverlayProps) 
     return () => {
       cancelAnimationFrame(rafId);
     };
-  }, [gameStateRef]);
+  }, [gameStateRef, viewRef]);
 
   return (
     <div
       ref={containerRef}
       className="absolute inset-0 pointer-events-none overflow-hidden"
-      style={{
-        zIndex: 12,
-        // Matches the orthographic camera zoom so overlay sprites land on the
-        // same pixels as the entities they belong to.
-        transform: worldScale === 1 ? undefined : `scale(${worldScale})`,
-        transformOrigin: '0 0',
-        width: worldScale === 1 ? undefined : `${100 / worldScale}%`,
-        height: worldScale === 1 ? undefined : `${100 / worldScale}%`,
-      }}
+      style={{ zIndex: 12 }}
     />
   );
 }

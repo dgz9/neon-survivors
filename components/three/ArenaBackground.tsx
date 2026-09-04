@@ -4,12 +4,13 @@ import { useRef, useMemo } from 'react';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
 import { GameState, ArenaType } from '@/types/game';
+import { ViewTransform } from '@/lib/viewport';
 
 interface ArenaBackgroundProps {
   gameStateRef: React.RefObject<GameState | null>;
-  /** Camera zoom. Below 1 the camera shows more world than the canvas has CSS
-   *  pixels, so the backdrop has to be inflated to match or it stops short. */
-  worldScale?: number;
+  /** World-to-canvas mapping. The backdrop covers exactly the world rect, which
+   *  is what makes the letterbox visible as plain black in co-op. */
+  viewRef: React.RefObject<ViewTransform>;
 }
 
 const vertexShader = `
@@ -149,7 +150,7 @@ const fragmentShaders: Record<ArenaType, string> = {
   `,
 };
 
-export function ArenaBackground({ gameStateRef, worldScale = 1 }: ArenaBackgroundProps) {
+export function ArenaBackground({ gameStateRef, viewRef }: ArenaBackgroundProps) {
   const meshRef = useRef<THREE.Mesh>(null);
   const materialRef = useRef<THREE.ShaderMaterial>(null);
 
@@ -162,14 +163,13 @@ export function ArenaBackground({ gameStateRef, worldScale = 1 }: ArenaBackgroun
     uBombPulse: { value: 0 },
   }), []);
 
-  useFrame(({ clock, size }) => {
+  useFrame(({ clock }) => {
     const state = gameStateRef.current;
-    if (!state || !materialRef.current) return;
+    const view = viewRef.current;
+    if (!state || !view || !materialRef.current) return;
 
-    // World units visible on screen, which on mobile is more than the canvas is
-    // wide because the camera is zoomed out.
-    const worldWidth = size.width / worldScale;
-    const worldHeight = size.height / worldScale;
+    const worldWidth = view.worldWidth;
+    const worldHeight = view.worldHeight;
 
     uniforms.uTime.value = clock.elapsedTime * 1000;
     uniforms.uResolution.value.set(worldWidth, worldHeight);

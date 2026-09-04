@@ -74,6 +74,19 @@ export class CoopGuestWorld {
   /** Most recent authoritative values (not interpolated). */
   latest: DecodedSnapshot | null = null;
 
+  /**
+   * The host's arena size. The host owns it, so the guest sizes its own
+   * movement bounds and camera from this rather than from its own viewport —
+   * otherwise the two players are walking around different arenas.
+   */
+  get worldWidth(): number {
+    return this.latest?.worldWidth || 0;
+  }
+
+  get worldHeight(): number {
+    return this.latest?.worldHeight || 0;
+  }
+
   ingest(snapshot: DecodedSnapshot, localNowMs: number): void {
     this.clock.sample(snapshot.hostTime, localNowMs);
     this.buffer.push(snapshot.hostTime, snapshot);

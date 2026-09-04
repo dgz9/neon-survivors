@@ -4,6 +4,7 @@ import { useRef } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
 import { GameState } from '@/types/game';
+import { ViewTransform } from '@/lib/viewport';
 import { PlayerMesh } from './PlayerMesh';
 import { EnemyInstances } from './EnemyInstances';
 import { ProjectileInstances } from './ProjectileInstances';
@@ -16,40 +17,50 @@ import { PostFX } from './PostFX';
 interface GameSceneProps {
   gameStateRef: React.RefObject<GameState | null>;
   playerImage: HTMLImageElement | null;
-  mobileScale?: number;
+  viewRef: React.RefObject<ViewTransform>;
 }
 
-// Offsets all children so game coords (x, -y) align with R3F's centered ortho camera
-function SceneRoot({ children, mobileScale = 1 }: { children: React.ReactNode; mobileScale?: number }) {
+/** Zooms and centres the world so game coords (x, -y) line up with R3F's centred ortho camera. */
+export function SceneRoot({
+  children,
+  viewRef,
+}: {
+  children: React.ReactNode;
+  viewRef: React.RefObject<ViewTransform>;
+}) {
   const groupRef = useRef<THREE.Group>(null);
-  const { size, camera } = useThree();
+  const { camera } = useThree();
 
   useFrame(() => {
-    if (groupRef.current) {
-      // Adjust camera zoom to show more of the world (zoomed out on mobile)
-      const cam = camera as THREE.OrthographicCamera;
-      cam.zoom = mobileScale;
-      cam.updateProjectionMatrix();
+    const view = viewRef.current;
+    if (!groupRef.current || !view) return;
 
-      // Offset to map game (0,0) to the visible top-left corner
-      groupRef.current.position.set(-size.width / (2 * mobileScale), size.height / (2 * mobileScale), 0);
+    const cam = camera as THREE.OrthographicCamera;
+    if (cam.zoom !== view.scale) {
+      cam.zoom = view.scale;
+      cam.updateProjectionMatrix();
     }
+
+    // The camera looks at the middle of the canvas, so putting the world's
+    // top-left corner half a world away from the origin centres it — and
+    // letterboxes it when the world and the canvas have different shapes.
+    groupRef.current.position.set(-view.worldWidth / 2, view.worldHeight / 2, 0);
   });
 
   return <group ref={groupRef}>{children}</group>;
 }
 
-export function GameScene({ gameStateRef, playerImage, mobileScale = 1 }: GameSceneProps) {
+export function GameScene({ gameStateRef, playerImage, viewRef }: GameSceneProps) {
   return (
     <>
-      <SceneRoot mobileScale={mobileScale}>
-        <ArenaBackground gameStateRef={gameStateRef} worldScale={mobileScale} />
+      <SceneRoot viewRef={viewRef}>
+        <ArenaBackground gameStateRef={gameStateRef} viewRef={viewRef} />
         <XPOrbInstances gameStateRef={gameStateRef} />
         <ParticleSystem gameStateRef={gameStateRef} />
         <EnemyInstances gameStateRef={gameStateRef} />
         <ProjectileInstances gameStateRef={gameStateRef} />
         <PlayerMesh gameStateRef={gameStateRef} playerImage={playerImage} />
-        <ScreenEffects gameStateRef={gameStateRef} />
+        <ScreenEffects gameStateRef={gameStateRef} viewRef={viewRef} />
       </SceneRoot>
       <PostFX gameStateRef={gameStateRef} />
     </>
