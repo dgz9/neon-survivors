@@ -15,6 +15,7 @@ import {
   ClockSync,
   blend,
   computeInterpolationDelay,
+  MAX_TIME_WARP,
 } from './netcode';
 import { NetEvent } from './engine/netEvents';
 import { replayNetEvent, eventTime, ReplayHooks } from './engine/netReplay';
@@ -66,6 +67,9 @@ export class CoopGuestWorld {
   private projectileCache = new Map<number, Projectile>();
   private pendingEvents: NetEvent[] = [];
   private lastEventTime = 0;
+  /** Eased interpolation delay, in ms. Zero until the first frame. */
+  private delayMs = 0;
+  private lastRenderCall = 0;
 
   /** Live arrays handed to the renderers. */
   enemies: Enemy[] = [];
@@ -103,13 +107,37 @@ export class CoopGuestWorld {
     }
   }
 
+  /**
+   * How far behind the host the guest is currently drawing.
+   *
+   * Eased rather than applied directly: the raw figure tracks measured jitter,
+   * and feeding a jitter spike straight into the render clock warps the
+   * timeline by more than the spike itself.
+   */
   get interpolationDelayMs(): number {
-    return computeInterpolationDelay(SNAPSHOT_INTERVAL_MS, this.clock.jitterMs);
+    return this.delayMs || computeInterpolationDelay(SNAPSHOT_INTERVAL_MS, this.clock.jitterMs);
   }
 
-  /** The host-clock instant currently being rendered. */
+  /** The host-clock instant currently being rendered. Call once per frame. */
   renderTime(localNowMs: number): number {
-    return this.clock.toHostTime(localNowMs) - this.interpolationDelayMs;
+    const elapsed = this.lastRenderCall > 0
+      ? Math.max(0, Math.min(250, localNowMs - this.lastRenderCall))
+      : 0;
+    this.lastRenderCall = localNowMs;
+
+    const target = computeInterpolationDelay(SNAPSHOT_INTERVAL_MS, this.clock.jitterMs);
+    if (this.delayMs === 0) {
+      this.delayMs = target;
+    } else {
+      // Same budget the clock offset gets, so the two corrections together can
+      // never warp the timeline enough to read as a stutter.
+      const step = elapsed * MAX_TIME_WARP;
+      const diff = target - this.delayMs;
+      this.delayMs += Math.max(-step, Math.min(step, diff));
+    }
+
+    this.clock.advance(localNowMs);
+    return this.clock.toHostTime(localNowMs) - this.delayMs;
   }
 
   /**
@@ -279,6 +307,8 @@ export class CoopGuestWorld {
 
   reset(): void {
     this.buffer.clear();
+    this.delayMs = 0;
+    this.lastRenderCall = 0;
     this.enemyCache.clear();
     this.projectileCache.clear();
     this.pendingEvents.length = 0;
