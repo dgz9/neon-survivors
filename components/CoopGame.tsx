@@ -1244,44 +1244,6 @@ export default function CoopGame({
       if (!gs) return;
       const arenaSize = worldRef.current;
 
-      const prunedEnemies = gs.enemies.map(e => ({
-        id: e.id,
-        position: e.position,
-        velocity: e.velocity,
-        health: e.health,
-        maxHealth: e.maxHealth,
-        type: e.type,
-        radius: e.radius,
-        damage: e.damage,
-        color: e.color,
-        ghostAlpha: e.ghostAlpha,
-        spawnTime: e.spawnTime,
-        isElite: e.isElite,
-      }));
-
-      const prunedProjectiles = [];
-      const prCount = getProjectileCount();
-      for (let pi = 0; pi < prCount; pi++) {
-        const pr = gs.projectiles[pi];
-        prunedProjectiles.push({
-          nid: pr.nid,
-          position: pr.position,
-          velocity: pr.velocity,
-          damage: pr.damage,
-          radius: pr.radius,
-          color: pr.color,
-          isEnemy: pr.isEnemy,
-          piercing: pr.piercing,
-        });
-      }
-
-      const prunedOrbs = [];
-      const xpCount = getXPOrbCount();
-      for (let oi = 0; oi < xpCount; oi++) {
-        const o = gs.experienceOrbs[oi];
-        prunedOrbs.push({ position: o.position, value: o.value });
-      }
-
       const prunedPlayer = {
         position: gs.player.position,
         velocity: gs.player.velocity,
@@ -1346,10 +1308,14 @@ export default function CoopGame({
         gameTime: gs.gameTime,
         screenShake: gs.screenShake,
         pendingLevelUps: gs.pendingLevelUps,
-        enemies: prunedEnemies,
-        projectiles: prunedProjectiles,
+        // Handed over as-is; the encoder reads only the fields that go on the
+        // wire, and stops at the counts rather than walking the whole pool.
+        enemies: gs.enemies,
+        projectiles: gs.projectiles,
+        projectileCount: getProjectileCount(),
         powerups: gs.powerups,
-        experienceOrbs: prunedOrbs,
+        experienceOrbs: gs.experienceOrbs,
+        experienceOrbCount: getXPOrbCount(),
         events: drainEvents(),
         isGameOver: gs.isGameOver,
         isRunning: gs.isRunning,

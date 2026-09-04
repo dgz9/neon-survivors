@@ -127,6 +127,8 @@ export interface ExperienceOrb {
   _active: boolean;
   _poolIndex: number;
   id: string;
+  /** Stable across snapshots so co-op guests can interpolate orbs. */
+  nid: number;
   position: Vector2;
   value: number;
   createdAt: number;

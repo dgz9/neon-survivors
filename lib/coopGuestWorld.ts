@@ -8,7 +8,7 @@
  * GC mid-fight.
  */
 
-import { Enemy, EnemyType, GameState, Projectile } from '@/types/game';
+import { Enemy, EnemyType, ExperienceOrb, GameState, Projectile } from '@/types/game';
 import { DecodedSnapshot } from './multiplayer';
 import {
   SnapshotBuffer,
@@ -59,12 +59,25 @@ function makeProjectile(): Projectile {
   };
 }
 
+function makeOrb(): ExperienceOrb {
+  return {
+    _active: true,
+    _poolIndex: 0,
+    id: '',
+    nid: 0,
+    position: { x: 0, y: 0 },
+    value: 0,
+    createdAt: 0,
+  };
+}
+
 export class CoopGuestWorld {
   readonly buffer = new SnapshotBuffer<DecodedSnapshot>();
   readonly clock = new ClockSync();
 
   private enemyCache = new Map<string, Enemy>();
   private projectileCache = new Map<number, Projectile>();
+  private orbCache = new Map<number, ExperienceOrb>();
   private pendingEvents: NetEvent[] = [];
   private lastEventTime = 0;
   /** Eased interpolation delay, in ms. Zero until the first frame. */
@@ -74,6 +87,7 @@ export class CoopGuestWorld {
   /** Live arrays handed to the renderers. */
   enemies: Enemy[] = [];
   projectiles: Projectile[] = [];
+  orbs: ExperienceOrb[] = [];
 
   /** Most recent authoritative values (not interpolated). */
   latest: DecodedSnapshot | null = null;
@@ -275,13 +289,49 @@ export class CoopGuestWorld {
       }
     }
 
+    // --- XP orbs -------------------------------------------------------------
+    // Magnet pull drags these around fast enough that handing over the newest
+    // snapshot made them visibly step at the snapshot rate.
+    this.orbs.length = 0;
+    const fromOrbs = new Map<number, DecodedSnapshot['experienceOrbs'][number]>();
+    for (const o of from.data.experienceOrbs) fromOrbs.set(o.nid, o);
+
+    for (const next of to.data.experienceOrbs) {
+      let orb = this.orbCache.get(next.nid);
+      if (!orb) {
+        orb = makeOrb();
+        orb.nid = next.nid;
+        orb.id = `xo-${next.nid}`;
+        this.orbCache.set(next.nid, orb);
+      }
+
+      const prev = fromOrbs.get(next.nid);
+      if (prev) {
+        orb.position.x = blend(prev.position.x, next.position.x, a);
+        orb.position.y = blend(prev.position.y, next.position.y, a);
+      } else {
+        // Dropped between snapshots — no earlier sample to come from.
+        orb.position.x = next.position.x;
+        orb.position.y = next.position.y;
+      }
+      orb.value = next.value;
+      this.orbs.push(orb);
+    }
+
+    if (this.orbCache.size > this.orbs.length * 2 + 32) {
+      const live = new Set(this.orbs.map(o => o.nid));
+      for (const nid of Array.from(this.orbCache.keys())) {
+        if (!live.has(nid)) this.orbCache.delete(nid);
+      }
+    }
+
     // --- Everything else is either static or too slow to need interpolation ---
     state.enemies = this.enemies;
     state.projectiles = this.projectiles;
     state.projectileCount = this.projectiles.length;
     state.powerups = to.data.powerups as typeof state.powerups;
-    state.experienceOrbs = to.data.experienceOrbs as typeof state.experienceOrbs;
-    state.experienceOrbCount = to.data.experienceOrbs.length;
+    state.experienceOrbs = this.orbs;
+    state.experienceOrbCount = this.orbs.length;
 
     state.score = to.data.score;
     state.wave = to.data.wave;
@@ -311,9 +361,11 @@ export class CoopGuestWorld {
     this.lastRenderCall = 0;
     this.enemyCache.clear();
     this.projectileCache.clear();
+    this.orbCache.clear();
     this.pendingEvents.length = 0;
     this.enemies.length = 0;
     this.projectiles.length = 0;
+    this.orbs.length = 0;
     this.latest = null;
   }
 }
