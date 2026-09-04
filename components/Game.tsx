@@ -101,6 +101,8 @@ export default function Game({ playerImageUrl, playerName, arena = 'grid', onGam
   const [playerImage, setPlayerImage] = useState<HTMLImageElement | null>(null);
 
   const [isTouchDevice, setIsTouchDevice] = useState(false);
+  /** Gates the first world build on knowing whether the camera will be zoomed out. */
+  const [inputDetected, setInputDetected] = useState(false);
   const touchMovementRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
   const touchAimRef = useRef<{ x: number; y: number } | null>(null);
 
@@ -114,24 +116,42 @@ export default function Game({ playerImageUrl, playerName, arena = 'grid', onGam
   const lastEventRef = useRef<string | undefined>(undefined);
   const lastStreakRef = useRef<number>(0);
 
-  // Handle resize
-  useEffect(() => {
-    const handleResize = () => {
-      if (gameAreaRef.current) {
-        const rect = gameAreaRef.current.getBoundingClientRect();
-        const newDims = {
-          width: Math.floor(rect.width),
-          height: Math.floor(rect.height),
-        };
-        dimensionsRef.current = newDims;
-        setDimensions(newDims);
-      }
+  const measureArena = useCallback(() => {
+    const el = gameAreaRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const newDims = {
+      width: Math.floor(rect.width),
+      height: Math.floor(rect.height),
     };
-
-    handleResize();
-    window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
+    if (newDims.width <= 0 || newDims.height <= 0) return;
+    if (
+      newDims.width === dimensionsRef.current.width &&
+      newDims.height === dimensionsRef.current.height
+    ) {
+      return;
+    }
+    dimensionsRef.current = newDims;
+    setDimensions(newDims);
   }, []);
+
+  // Track the arena box itself, not just the window: rotating the device
+  // resizes the box without firing a window resize, which used to leave the
+  // world taller than what is on screen so enemies drifted into a strip nobody
+  // could see.
+  useEffect(() => {
+    const el = gameAreaRef.current;
+    if (!el) return;
+
+    measureArena();
+    const observer = new ResizeObserver(measureArena);
+    observer.observe(el);
+    window.addEventListener('orientationchange', measureArena);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener('orientationchange', measureArena);
+    };
+  }, [measureArena]);
 
   const mobileScale = isTouchDevice ? 0.7 : 1;
   const mobileScaleRef = useRef(mobileScale);
@@ -158,20 +178,31 @@ export default function Game({ playerImageUrl, playerName, arena = 'grid', onGam
   }, [playerImageUrl, arena, mobileScale]);
 
   useEffect(() => {
-    if (dimensionsRef.current.width > 0 && dimensionsRef.current.height > 0 && !gameInitializedRef.current) {
-      gameInitializedRef.current = true;
-      initGame();
-    }
-  }, [initGame, dimensions]);
+    if (!inputDetected || gameInitializedRef.current) return;
+    // Re-read the box now that the touch layout is committed, so the world is
+    // built against the arena the player will actually see.
+    measureArena();
+    if (dimensionsRef.current.width <= 0 || dimensionsRef.current.height <= 0) return;
+    gameInitializedRef.current = true;
+    initGame();
+  }, [initGame, dimensions, inputDetected, measureArena]);
 
   useEffect(() => {
     setSoundEnabled(!isMuted());
   }, []);
 
-  // Detect touch device
+  // Detect touch device. A touch-capable laptop reports maxTouchPoints > 0 while
+  // still being driven with a mouse, so ask for a coarse primary pointer first
+  // and only fall back to feature sniffing on browsers without pointer queries.
   useEffect(() => {
-    const hasTouch = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
-    setIsTouchDevice(hasTouch);
+    const hasTouchEvents = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+    const query = window.matchMedia?.('(pointer: coarse)');
+    const evaluate = () => setIsTouchDevice(query ? query.matches : hasTouchEvents);
+
+    evaluate();
+    setInputDetected(true);
+    query?.addEventListener('change', evaluate);
+    return () => query?.removeEventListener('change', evaluate);
   }, []);
 
   // Lock the document while a match is running so mobile browsers cannot
@@ -192,6 +223,14 @@ export default function Game({ playerImageUrl, playerName, arena = 'grid', onGam
 
   const handleTouchPause = useCallback(() => {
     setIsPaused(p => !p);
+  }, []);
+
+  const handleToggleSound = useCallback(() => {
+    setSoundEnabled(s => {
+      const next = !s;
+      setMuted(!next);
+      return next;
+    });
   }, []);
 
   useEffect(() => {
@@ -555,7 +594,7 @@ export default function Game({ playerImageUrl, playerName, arena = 'grid', onGam
   }, [isLoading, isPaused, showUpgrades, onGameOver, isTouchDevice, mobileScale]);
 
   return (
-    <div className={`fixed inset-0 bg-brutal-black flex flex-col ${isTouchDevice ? 'game-touch-area safe-area-top safe-area-bottom' : ''}`}>
+    <div className={`fixed inset-0 bg-brutal-black flex flex-col ${isTouchDevice ? 'game-touch-area safe-area-top safe-area-bottom safe-area-x' : ''}`}>
       {/* Header - hidden on mobile */}
       <div className={`h-12 flex items-center justify-between px-4 border-b border-white/10 bg-brutal-dark/80 backdrop-blur-sm z-10 ${isTouchDevice ? 'hidden' : ''}`}>
         <button
@@ -577,13 +616,7 @@ export default function Game({ playerImageUrl, playerName, arena = 'grid', onGam
 
         <div className="flex items-center gap-4">
           <button
-            onClick={() => {
-              setSoundEnabled(s => {
-                const next = !s;
-                setMuted(!next);
-                return next;
-              });
-            }}
+            onClick={handleToggleSound}
             className="font-mono text-xs uppercase tracking-wider text-white/40 hover:text-electric-cyan transition-colors"
           >
             {soundEnabled ? '\uD83D\uDD0A' : '\uD83D\uDD07'}
@@ -599,7 +632,7 @@ export default function Game({ playerImageUrl, playerName, arena = 'grid', onGam
       </div>
 
       {/* Game area */}
-      <div ref={gameAreaRef} className="flex-1 relative overflow-hidden">
+      <div ref={gameAreaRef} className="flex-1 min-h-0 relative overflow-hidden">
         {/* Loading overlay */}
         {isLoading && (
           <div className="absolute inset-0 flex items-center justify-center bg-brutal-black z-20">
@@ -630,6 +663,12 @@ export default function Game({ playerImageUrl, playerName, arena = 'grid', onGam
                   Resume
                 </button>
                 <button
+                  onClick={handleToggleSound}
+                  className="block w-48 mx-auto btn-brutal-outline"
+                >
+                  Sound: {soundEnabled ? 'On' : 'Off'}
+                </button>
+                <button
                   onClick={onBack}
                   className="block w-48 mx-auto btn-brutal-outline"
                 >
@@ -640,43 +679,47 @@ export default function Game({ playerImageUrl, playerName, arena = 'grid', onGam
           </div>
         )}
 
-        {/* Upgrade overlay */}
+        {/* Upgrade overlay. The document is scroll-locked during a match, so
+            this pane owns its own scrolling — centred when it fits, scrollable
+            from the top when three cards outgrow a short phone screen. */}
         {showUpgrades && (
-          <div className="absolute inset-0 flex items-center justify-center bg-brutal-black/95 z-30">
-            <div className="text-center max-w-2xl w-full px-4">
-              <div className="font-display text-4xl text-electric-cyan mb-2 glitch-text" data-text="LEVEL UP!">
-                LEVEL UP!
-              </div>
-              <p className="font-mono text-sm text-white/60 mb-8">
-                Level {displayState?.level || 1} — Choose an upgrade
-              </p>
+          <div className="absolute inset-0 bg-brutal-black/95 z-30 overflow-y-auto overscroll-contain">
+            <div className="min-h-full flex items-center justify-center p-4">
+              <div className="text-center max-w-2xl w-full">
+                <div className="font-display text-3xl sm:text-4xl text-electric-cyan mb-2 glitch-text" data-text="LEVEL UP!">
+                  LEVEL UP!
+                </div>
+                <p className="font-mono text-xs sm:text-sm text-white/60 mb-4 sm:mb-8">
+                  Level {displayState?.level || 1} — Choose an upgrade
+                </p>
 
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                {availableUpgrades.map((upgrade) => (
-                  <button
-                    key={upgrade.id}
-                    onClick={() => handleUpgrade(upgrade)}
-                    className="group relative bg-brutal-dark border-2 border-white/20 hover:border-electric-cyan p-6 transition-all duration-200 hover:scale-105"
-                    style={{ borderColor: `${upgrade.color}40` }}
-                  >
-                    <div
-                      className="absolute inset-0 opacity-0 group-hover:opacity-20 transition-opacity"
-                      style={{ backgroundColor: upgrade.color }}
-                    />
-                    <div className="relative z-10">
-                      <div className="text-4xl mb-3">{upgrade.icon}</div>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-4">
+                  {availableUpgrades.map((upgrade) => (
+                    <button
+                      key={upgrade.id}
+                      onClick={() => handleUpgrade(upgrade)}
+                      className="group relative bg-brutal-dark border-2 border-white/20 hover:border-electric-cyan p-4 sm:p-5 md:p-6 transition-all duration-200 hover:scale-105 active:scale-95 flex items-center gap-4 text-left sm:block sm:text-center"
+                      style={{ borderColor: `${upgrade.color}40` }}
+                    >
                       <div
-                        className="font-display text-xl mb-2"
-                        style={{ color: upgrade.color }}
-                      >
-                        {upgrade.name}
+                        className="absolute inset-0 opacity-0 group-hover:opacity-20 transition-opacity"
+                        style={{ backgroundColor: upgrade.color }}
+                      />
+                      <div className="relative z-10 text-3xl sm:text-4xl shrink-0 sm:mb-3">{upgrade.icon}</div>
+                      <div className="relative z-10 min-w-0">
+                        <div
+                          className="font-display text-lg sm:text-xl sm:mb-2"
+                          style={{ color: upgrade.color }}
+                        >
+                          {upgrade.name}
+                        </div>
+                        <p className="font-mono text-xs text-white/60">
+                          {upgrade.description}
+                        </p>
                       </div>
-                      <p className="font-mono text-xs text-white/60">
-                        {upgrade.description}
-                      </p>
-                    </div>
-                  </button>
-                ))}
+                    </button>
+                  ))}
+                </div>
               </div>
             </div>
           </div>
@@ -703,7 +746,8 @@ export default function Game({ playerImageUrl, playerName, arena = 'grid', onGam
             onMovementChange={handleTouchMovement}
             onAimChange={handleTouchAim}
             onPause={handleTouchPause}
-            gameAreaRef={gameAreaRef}
+            soundEnabled={soundEnabled}
+            onToggleSound={handleToggleSound}
             visible={true}
           />
         )}
@@ -774,11 +818,16 @@ export default function Game({ playerImageUrl, playerName, arena = 'grid', onGam
         </div>
       )}
 
-      {/* Mobile bottom HUD bar */}
-      {isTouchDevice && displayState && !isLoading && (
-        <div className="h-14 flex items-center justify-between px-3 border-t border-white/10 bg-brutal-dark/95 backdrop-blur-sm z-10 font-mono">
+      {/* Mobile bottom HUD bar. Rendered as soon as we know this is a touch
+          device: reserving the space up front means the arena is already its
+          final size when the world is built, instead of shrinking under the
+          player the moment the first display state lands. */}
+      {isTouchDevice && (
+        <div className="h-14 landscape:h-11 shrink-0 flex items-center justify-between gap-2 px-3 border-t border-white/10 bg-brutal-dark/95 backdrop-blur-sm z-10 font-mono">
+          {displayState && !isLoading && (
+          <>
           {/* HP */}
-          <div className="flex flex-col gap-0.5" style={{ width: '28%' }}>
+          <div className="flex flex-col gap-0.5 shrink-0" style={{ width: '28%' }}>
             <div className="text-[9px] text-white/50">HP {Math.ceil(displayState.health)}/{displayState.maxHealth}</div>
             <div className="w-full h-2 bg-white/10 overflow-hidden">
               <div
@@ -795,7 +844,7 @@ export default function Game({ playerImageUrl, playerName, arena = 'grid', onGam
           {/* Score + Level */}
           <div className="flex flex-col items-center gap-0.5">
             <div className="text-xs text-white font-bold" style={{ textShadow: '0 0 6px rgba(0,240,255,0.5)' }}>
-              {displayState.score.toLocaleString()}
+              {Math.floor(displayState.score).toLocaleString()}
               {displayState.multiplier > 1 && (
                 <span className="text-[9px] ml-1" style={{ color: '#e4ff1a' }}>x{displayState.multiplier.toFixed(1)}</span>
               )}
@@ -803,7 +852,7 @@ export default function Game({ playerImageUrl, playerName, arena = 'grid', onGam
             <div className="text-[9px] text-electric-cyan">LV{displayState.level} W{displayState.wave}</div>
           </div>
           {/* XP */}
-          <div className="flex flex-col gap-0.5" style={{ width: '28%' }}>
+          <div className="flex flex-col gap-0.5 shrink-0" style={{ width: '28%' }}>
             <div className="text-[9px] text-white/50 text-right">XP {Math.floor(displayState.experience)}/{displayState.experienceToLevel}</div>
             <div className="w-full h-2 bg-white/10 overflow-hidden">
               <div
@@ -815,6 +864,8 @@ export default function Game({ playerImageUrl, playerName, arena = 'grid', onGam
               />
             </div>
           </div>
+          </>
+          )}
         </div>
       )}
 

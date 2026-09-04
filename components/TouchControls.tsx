@@ -7,8 +7,9 @@ interface TouchControlsProps {
   onMovementChange: (direction: Vector2) => void;
   onAimChange: (position: Vector2 | null) => void;
   onPause: () => void;
-  gameAreaRef: React.RefObject<HTMLDivElement | null>;
   visible: boolean;
+  soundEnabled?: boolean;
+  onToggleSound?: () => void;
 }
 
 interface JoystickState {
@@ -24,6 +25,10 @@ interface JoystickState {
 const DEAD_ZONE = 0.14;
 /** Distance the aim vector is projected in world units. */
 const AIM_DISTANCE = 220;
+/** Top strip kept clear so a thumb reaching for pause doesn't spawn a stick. */
+const TOP_RESERVED = 64;
+/** Backing-store guard — no phone needs more, and it caps memory on high-DPR screens. */
+const MAX_BACKING_PX = 4096;
 
 function createStick(): JoystickState {
   return {
@@ -45,9 +50,11 @@ export default function TouchControls({
   onMovementChange,
   onAimChange,
   onPause,
-  gameAreaRef,
   visible,
+  soundEnabled,
+  onToggleSound,
 }: TouchControlsProps) {
+  const rootRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const leftStick = useRef<JoystickState>(createStick());
   const rightStick = useRef<JoystickState>(createStick());
@@ -56,14 +63,49 @@ export default function TouchControls({
   const radiusRef = useRef(56);
   /** Resting positions for the idle hint rings. */
   const anchorsRef = useRef({ left: { x: 0, y: 0 }, right: { x: 0, y: 0 } });
+  /**
+   * CSS size of the overlay, measured from the wrapper div.
+   * A <canvas> is a replaced element: absolutely positioned, its used size comes
+   * from the width/height attributes rather than from `inset: 0`. Measuring the
+   * canvas to pick its own backing store therefore feeds back on itself and the
+   * element grows without bound. The wrapper is a plain block, so it is safe.
+   */
+  const sizeRef = useRef({ width: 0, height: 0 });
 
   const layout = useCallback((width: number, height: number) => {
     const shortSide = Math.min(width, height);
-    radiusRef.current = Math.max(46, Math.min(84, shortSide * 0.17));
-    const inset = radiusRef.current + 28;
+    radiusRef.current = Math.max(42, Math.min(68, shortSide * 0.16));
+    const inset = radiusRef.current + Math.max(18, Math.min(36, shortSide * 0.055));
     anchorsRef.current.left = { x: inset, y: height - inset };
     anchorsRef.current.right = { x: width - inset, y: height - inset };
   }, []);
+
+  // Track the overlay's real size so the rings land where the thumbs are, and
+  // keep following it: the bottom HUD bar mounting and device rotation both
+  // resize the arena without firing a window resize.
+  useEffect(() => {
+    if (!visible) return;
+    const root = rootRef.current;
+    if (!root) return;
+
+    const measure = () => {
+      const rect = root.getBoundingClientRect();
+      const width = Math.max(1, Math.round(rect.width));
+      const height = Math.max(1, Math.round(rect.height));
+      if (width === sizeRef.current.width && height === sizeRef.current.height) return;
+      sizeRef.current = { width, height };
+      layout(width, height);
+    };
+
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(root);
+    window.addEventListener('orientationchange', measure);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener('orientationchange', measure);
+    };
+  }, [visible, layout]);
 
   const drawJoysticks = useCallback(() => {
     animFrameRef.current = requestAnimationFrame(drawJoysticks);
@@ -73,26 +115,27 @@ export default function TouchControls({
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
+    const { width, height } = sizeRef.current;
+    if (width <= 1 || height <= 1) return;
+
     // Back the canvas with real device pixels — at 1x the rings were visibly
     // soft on every modern phone.
-    const rect = canvas.getBoundingClientRect();
     const dpr = Math.min(window.devicePixelRatio || 1, 3);
-    const targetW = Math.round(rect.width * dpr);
-    const targetH = Math.round(rect.height * dpr);
+    const targetW = Math.min(MAX_BACKING_PX, Math.round(width * dpr));
+    const targetH = Math.min(MAX_BACKING_PX, Math.round(height * dpr));
     if (canvas.width !== targetW || canvas.height !== targetH) {
       canvas.width = targetW;
       canvas.height = targetH;
-      layout(rect.width, rect.height);
     }
 
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.clearRect(0, 0, rect.width, rect.height);
+    ctx.setTransform(targetW / width, 0, 0, targetH / height, 0, 0);
+    ctx.clearRect(0, 0, width, height);
 
     const radius = radiusRef.current;
 
     const drawStick = (stick: JoystickState, anchor: Vector2, color: string, label: string) => {
       // Ease the ring toward its target visibility instead of snapping.
-      const target = stick.active ? 1 : 0.22;
+      const target = stick.active ? 1 : 0.34;
       stick.opacity += (target - stick.opacity) * 0.18;
       if (stick.opacity < 0.01) return;
 
@@ -107,20 +150,20 @@ export default function TouchControls({
       ctx.arc(cx, cy, radius, 0, Math.PI * 2);
       ctx.strokeStyle = color;
       ctx.lineWidth = 2;
-      ctx.globalAlpha = 0.32 * o;
+      ctx.globalAlpha = 0.45 * o;
       ctx.stroke();
 
       ctx.beginPath();
       ctx.arc(cx, cy, radius, 0, Math.PI * 2);
       ctx.fillStyle = color;
-      ctx.globalAlpha = 0.06 * o;
+      ctx.globalAlpha = 0.08 * o;
       ctx.fill();
 
       if (!stick.active) {
         // Idle hint so a new player knows where to put their thumbs.
-        ctx.globalAlpha = 0.4 * o;
+        ctx.globalAlpha = 0.7 * o;
         ctx.fillStyle = color;
-        ctx.font = '600 10px monospace';
+        ctx.font = '600 11px ui-monospace, monospace';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
         ctx.fillText(label, cx, cy);
@@ -170,7 +213,7 @@ export default function TouchControls({
 
     drawStick(leftStick.current, anchorsRef.current.left, '#00f0ff', 'MOVE');
     drawStick(rightStick.current, anchorsRef.current.right, '#ff2d6a', 'AIM');
-  }, [layout]);
+  }, []);
 
   useEffect(() => {
     if (!visible) return;
@@ -182,7 +225,8 @@ export default function TouchControls({
     if (!visible) return;
 
     const canvas = canvasRef.current;
-    if (!canvas) return;
+    const root = rootRef.current;
+    if (!canvas || !root) return;
 
     const getStickOutput = (stick: JoystickState): Vector2 => {
       const radius = radiusRef.current;
@@ -248,13 +292,15 @@ export default function TouchControls({
 
     const handleTouchStart = (e: TouchEvent) => {
       e.preventDefault();
-      const rect = canvas.getBoundingClientRect();
+      const rect = root.getBoundingClientRect();
       const midX = rect.width / 2;
 
       for (let i = 0; i < e.changedTouches.length; i++) {
         const touch = e.changedTouches[i];
         const x = touch.clientX - rect.left;
         const y = touch.clientY - rect.top;
+        // Leave the pause/sound row alone.
+        if (y < TOP_RESERVED) continue;
         const prefersLeft = x < midX;
 
         // Prefer the stick on the side that was touched, but fall back to the
@@ -290,7 +336,7 @@ export default function TouchControls({
 
     const handleTouchMove = (e: TouchEvent) => {
       e.preventDefault();
-      const rect = canvas.getBoundingClientRect();
+      const rect = root.getBoundingClientRect();
 
       for (let i = 0; i < e.changedTouches.length; i++) {
         const touch = e.changedTouches[i];
@@ -347,32 +393,39 @@ export default function TouchControls({
       window.removeEventListener('blur', releaseAll);
       releaseAll();
     };
-  }, [visible, onMovementChange, onAimChange, gameAreaRef]);
+  }, [visible, onMovementChange, onAimChange]);
 
   if (!visible) return null;
 
   return (
-    <>
-      {/* Touch overlay canvas for joystick rendering */}
+    <div ref={rootRef} className="absolute inset-0 z-40 pointer-events-none">
+      {/* Touch overlay canvas for joystick rendering. w-full/h-full is load
+          bearing: without it the canvas sizes itself from its own attributes. */}
       <canvas
         ref={canvasRef}
-        className="absolute inset-0 z-40 touch-none select-none"
+        className="block w-full h-full touch-none select-none"
         style={{ pointerEvents: 'auto' }}
       />
-      {/* Pause button — sized to a comfortable tap target and kept clear of the
-          notch on devices that report a safe area. */}
-      <button
-        onClick={onPause}
-        aria-label="Pause"
-        className="absolute z-50 w-12 h-12 flex items-center justify-center bg-brutal-dark/80 border border-white/20 active:bg-white/25 touch-none"
-        style={{
-          pointerEvents: 'auto',
-          top: 'calc(env(safe-area-inset-top, 0px) + 8px)',
-          right: 'calc(env(safe-area-inset-right, 0px) + 8px)',
-        }}
-      >
-        <span className="text-white/70 text-xl font-mono leading-none">||</span>
-      </button>
-    </>
+      {/* Sound + pause, sized to a comfortable tap target. The game shell
+          already pads for the safe area, so plain offsets are enough here. */}
+      <div className="absolute top-2 right-2 flex items-center gap-2">
+        {onToggleSound && (
+          <button
+            onClick={onToggleSound}
+            aria-label={soundEnabled ? 'Mute sound' : 'Unmute sound'}
+            className="w-11 h-11 flex items-center justify-center bg-brutal-dark/80 border border-white/20 active:bg-white/25 touch-none pointer-events-auto"
+          >
+            <span className="text-base leading-none">{soundEnabled ? '🔊' : '🔇'}</span>
+          </button>
+        )}
+        <button
+          onClick={onPause}
+          aria-label="Pause"
+          className="w-11 h-11 flex items-center justify-center bg-brutal-dark/80 border border-white/20 active:bg-white/25 touch-none pointer-events-auto"
+        >
+          <span className="text-white/70 text-xl font-mono leading-none">||</span>
+        </button>
+      </div>
+    </div>
   );
 }

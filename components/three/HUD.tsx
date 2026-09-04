@@ -68,8 +68,9 @@ export function HUD({ displayState, isMobile = false }: HUDProps) {
       className="absolute inset-0 pointer-events-none font-mono"
       style={{ zIndex: 10 }}
     >
-      {/* Score - Top Right */}
-      <div className="absolute top-4 right-4 text-right">
+      {/* Score - Top Right (hidden on mobile - the pause/sound buttons live
+          here, and the bottom bar already carries score and multiplier) */}
+      <div className={`absolute top-4 right-4 text-right ${isMobile ? 'hidden' : ''}`}>
         <div className="text-white text-2xl font-bold" style={{ textShadow: '0 0 10px rgba(0,240,255,0.8)' }}>
           {score.toLocaleString()}
         </div>
@@ -100,6 +101,21 @@ export function HUD({ displayState, isMobile = false }: HUDProps) {
           </div>
         )}
       </div>
+
+      {/* Kill streak - Top Left on mobile, where nothing else competes */}
+      {isMobile && killStreak >= 3 && (
+        <div
+          className="absolute top-3 left-3 px-2 py-0.5 rounded text-xs font-bold"
+          style={{
+            background: 'rgba(255,45,106,0.15)',
+            border: '1px solid rgba(255,45,106,0.6)',
+            color: '#ff2d6a',
+            textShadow: '0 0 6px rgba(255,45,106,0.6)',
+          }}
+        >
+          {killStreak} streak
+        </div>
+      )}
 
       {/* Health Bar - Bottom Left (hidden on mobile - shown in bottom bar) */}
       <div className={`absolute bottom-4 left-4 ${isMobile ? 'hidden' : ''}`} style={{ width: 180 }}>
@@ -170,7 +186,7 @@ export function HUD({ displayState, isMobile = false }: HUDProps) {
           style={{ opacity: waveAnnounceFade }}
         >
           <div
-            className="text-5xl font-bold tracking-widest"
+            className="text-3xl sm:text-5xl font-bold tracking-widest"
             style={{
               color: '#fff',
               textShadow: '0 0 20px rgba(0,240,255,0.8), 0 0 40px rgba(0,240,255,0.4)',
@@ -184,11 +200,11 @@ export function HUD({ displayState, isMobile = false }: HUDProps) {
 
       {showEventAnnounce && activeEvent && (
         <div
-          className="absolute inset-0 flex items-start justify-center pt-24"
+          className="absolute inset-0 flex items-start justify-center pt-20 sm:pt-24 px-4"
           style={{ opacity: eventAnnounceFade }}
         >
           <div
-            className="text-2xl font-bold tracking-[0.2em]"
+            className="text-lg sm:text-2xl font-bold tracking-[0.2em] text-center"
             style={{
               color: activeEvent === 'surge' ? '#ff2d6a' : '#00f0ff',
               textShadow: activeEvent === 'surge'

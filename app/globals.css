@@ -177,6 +177,12 @@ html.playing body {
   .safe-area-bottom {
     padding-bottom: env(safe-area-inset-bottom);
   }
+  /* Landscape is where the notch and the rounded corners eat into the sides,
+     which is exactly where the joystick rings sit. */
+  .safe-area-x {
+    padding-left: env(safe-area-inset-left);
+    padding-right: env(safe-area-inset-right);
+  }
 }
 
 /* Scrollbar styling */

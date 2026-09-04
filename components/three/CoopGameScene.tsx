@@ -127,7 +127,7 @@ export function CoopGameScene({
   return (
     <>
       <SceneRoot mobileScale={mobileScale}>
-        <ArenaBackground gameStateRef={gameStateRef} />
+        <ArenaBackground gameStateRef={gameStateRef} worldScale={mobileScale} />
         <XPOrbInstances gameStateRef={gameStateRef} />
         <ParticleSystem gameStateRef={gameStateRef} />
         <EnemyInstances gameStateRef={gameStateRef} />
