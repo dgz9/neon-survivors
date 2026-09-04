@@ -121,7 +121,7 @@ export function replayNetEvent(event: NetEvent, hooks: ReplayHooks = {}): void {
       const isLocal = event[6] === 1;
 
       createPlayerHurtEffect({ x, y }, heavy);
-      emitText(x, y - 10, `-${amount}`, COLORS.pink, heavy ? 32 : 24, heavy ? 1200 : 800, -2.5);
+      emitText(x, y - 10, `-${Math.round(amount)}`, COLORS.pink, heavy ? 32 : 24, heavy ? 1200 : 800, -2.5);
       hooks.onPlayerHurt?.(heavy, isLocal);
       break;
     }

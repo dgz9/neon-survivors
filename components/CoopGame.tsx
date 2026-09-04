@@ -1199,9 +1199,12 @@ export default function CoopGame({
       for (const enemy of gs.enemies) {
         const dist = Math.hypot(enemy.position.x - p2.position.x, enemy.position.y - p2.position.y);
         if (dist < enemy.radius + p2.radius && now > p2.invulnerableUntil) {
-          p2.health -= enemy.damage;
+          // Whole points, like P1 takes: enemy damage is a float, and the raw
+          // value was reaching the floating damage number as "-10.600000000000001".
+          const damage = Math.floor(enemy.damage);
+          p2.health -= damage;
           p2.invulnerableUntil = now + 1000;
-          gs.totalDamageTaken += enemy.damage;
+          gs.totalDamageTaken += damage;
           gs.screenShake = Math.max(gs.screenShake, 22);
           createPlayerHurtEffect(p2.position, true);
           recordEvent([
@@ -1209,7 +1212,7 @@ export default function CoopGame({
             now,
             Math.round(p2.position.x),
             Math.round(p2.position.y),
-            enemy.damage,
+            damage,
             1, // heavy
             1, // owner: the guest's avatar
           ]);
