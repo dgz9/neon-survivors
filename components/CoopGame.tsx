@@ -1147,22 +1147,24 @@ export default function CoopGame({
       const p2 = player2Ref.current;
       const queue = commandQueueRef.current;
 
-      // Every command exactly once, in order, and nothing else moves P2 — that
-      // identity is what lets the guest's prediction land on this answer rather
-      // than near it. Network timing is absorbed by the buffer instead: no
-      // steps while waiting on a late packet, two while spending a surplus.
-      const bounds = { width, height, radius: p2.radius };
-      const steps = queue.stepsThisTick();
-      for (let step = 0; step < steps; step++) {
-        applyMoveCommand(p2.position, p2.velocity, queue.next(), p2.speed, bounds, FIXED_DT);
-      }
+      // Always a command to move on: a real one when input has arrived, and a
+      // fading echo of the last one when it hasn't, so a late packet or a guest
+      // that cannot keep up with 60 commands a second reads as P2 gliding
+      // rather than P2 standing still.
+      const cmd = queue.next();
+      applyMoveCommand(
+        p2.position,
+        p2.velocity,
+        cmd,
+        p2.speed,
+        { width, height, radius: p2.radius },
+        FIXED_DT,
+      );
 
       const now = Date.now();
-      // Aim holds through a gap in the stream; only movement waits.
-      const aimAngle = queue.lastAim;
       const aimPos = {
-        x: p2.position.x + Math.cos(aimAngle) * 200,
-        y: p2.position.y + Math.sin(aimAngle) * 200,
+        x: p2.position.x + Math.cos(cmd.aim) * 200,
+        y: p2.position.y + Math.sin(cmd.aim) * 200,
       };
 
       for (const weapon of p2.weapons) {
