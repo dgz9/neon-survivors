@@ -281,7 +281,7 @@ export default function Home() {
               <div className="p-4 border border-white/10 bg-brutal-dark">
                 <div className="text-2xl mb-2">{isTouch ? '🎯' : '🖱️'}</div>
                 <div className="font-mono text-xs text-white/60">{isTouch ? 'Right thumb' : 'Mouse'}</div>
-                <div className="font-mono text-[10px] text-white/30">{isTouch ? 'Aim (auto otherwise)' : 'Aim'}</div>
+                <div className="font-mono text-[10px] text-white/30">{isTouch ? 'Aim (or walk to face)' : 'Aim'}</div>
               </div>
               <div className="p-4 border border-white/10 bg-brutal-dark">
                 <div className="text-2xl mb-2">⚡</div>

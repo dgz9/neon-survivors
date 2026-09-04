@@ -1,9 +1,11 @@
 'use client';
 
 import { useRef, useMemo } from 'react';
-import { useFrame, useThree } from '@react-three/fiber';
+import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
 import { GameState } from '@/types/game';
+import { ViewTransform } from '@/lib/viewport';
+import { SceneRoot } from './GameScene';
 import { PlayerMesh } from './PlayerMesh';
 import { EnemyInstances } from './EnemyInstances';
 import { ProjectileInstances } from './ProjectileInstances';
@@ -29,32 +31,12 @@ interface CoopGameSceneProps {
   player2Image: HTMLImageElement | null;
   localPredictedProjectilesRef: React.RefObject<LocalPredictedProjectile[]>;
   isHost: boolean;
-  mobileScale?: number;
+  viewRef: React.RefObject<ViewTransform>;
 }
 
 const MAX_PREDICTED = 50;
 const dummyObj = new THREE.Object3D();
 const tmpColor = new THREE.Color();
-
-// Offsets all children so game coords (x, -y) align with R3F's centered ortho camera
-function SceneRoot({ children, mobileScale = 1 }: { children: React.ReactNode; mobileScale?: number }) {
-  const groupRef = useRef<THREE.Group>(null);
-  const { size, camera } = useThree();
-
-  useFrame(() => {
-    if (groupRef.current) {
-      // Adjust camera zoom to show more of the world (zoomed out on mobile)
-      const cam = camera as THREE.OrthographicCamera;
-      cam.zoom = mobileScale;
-      cam.updateProjectionMatrix();
-
-      // Offset to map game (0,0) to the visible top-left corner
-      groupRef.current.position.set(-size.width / (2 * mobileScale), size.height / (2 * mobileScale), 0);
-    }
-  });
-
-  return <group ref={groupRef}>{children}</group>;
-}
 
 function LocalPredictedProjectiles({
   projectilesRef,
@@ -122,12 +104,12 @@ export function CoopGameScene({
   player2Image,
   localPredictedProjectilesRef,
   isHost,
-  mobileScale = 1,
+  viewRef,
 }: CoopGameSceneProps) {
   return (
     <>
-      <SceneRoot mobileScale={mobileScale}>
-        <ArenaBackground gameStateRef={gameStateRef} worldScale={mobileScale} />
+      <SceneRoot viewRef={viewRef}>
+        <ArenaBackground gameStateRef={gameStateRef} viewRef={viewRef} />
         <XPOrbInstances gameStateRef={gameStateRef} />
         <ParticleSystem gameStateRef={gameStateRef} />
         <EnemyInstances gameStateRef={gameStateRef} />
@@ -144,7 +126,7 @@ export function CoopGameScene({
             projectilesRef={localPredictedProjectilesRef}
           />
         )}
-        <ScreenEffects gameStateRef={gameStateRef} />
+        <ScreenEffects gameStateRef={gameStateRef} viewRef={viewRef} />
       </SceneRoot>
       {/* Same reactive post stack as single player so co-op does not look flat. */}
       <PostFX gameStateRef={gameStateRef} />

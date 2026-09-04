@@ -167,6 +167,8 @@ export function createProjectilePool(capacity = 200) {
   );
 }
 
+let nextOrbNid = 1;
+
 export function createXPOrbPool(capacity = 150) {
   return new ObjectPool<ExperienceOrb>(
     capacity,
@@ -174,12 +176,17 @@ export function createXPOrbPool(capacity = 150) {
       _active: false,
       _poolIndex: 0,
       id: '',
+      nid: 0,
       position: { x: 0, y: 0 },
       value: 0,
       createdAt: 0,
     }),
     (o) => {
       o.id = '';
+      // Fresh identity on every acquire, exactly as projectiles get one: orbs
+      // are magnet-pulled around the arena, and without a stable id the guest
+      // has nothing to interpolate them between.
+      o.nid = nextOrbNid++;
       o.position.x = 0;
       o.position.y = 0;
       o.value = 0;

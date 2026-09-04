@@ -1,5 +1,11 @@
 import { Player, GameConfig, Vector2 } from '@/types/game';
 
+/**
+ * How fast velocity chases the stick, per fixed tick. Shared with the co-op
+ * movement model so both players handle identically.
+ */
+export const MOVE_ACCELERATION = 0.25;
+
 export function updatePlayer(
   player: Player,
   input: { keys: Set<string>; mousePos: Vector2; mouseDown: boolean; touchMovement?: Vector2 },
@@ -31,9 +37,8 @@ export function updatePlayer(
     }
   }
 
-  const acceleration = 0.25;
-  const vx = player.velocity.x + (targetVx - player.velocity.x) * acceleration;
-  const vy = player.velocity.y + (targetVy - player.velocity.y) * acceleration;
+  const vx = player.velocity.x + (targetVx - player.velocity.x) * MOVE_ACCELERATION;
+  const vy = player.velocity.y + (targetVy - player.velocity.y) * MOVE_ACCELERATION;
 
   let newX = player.position.x + vx * deltaTime;
   let newY = player.position.y + vy * deltaTime;

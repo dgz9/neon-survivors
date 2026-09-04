@@ -18,6 +18,7 @@
  */
 
 import { Vector2 } from '@/types/game';
+import { MOVE_ACCELERATION } from './engine/player';
 
 // ---------------------------------------------------------------------------
 // Input commands
@@ -78,8 +79,11 @@ export function applyMoveCommand(
     dy /= len;
   }
 
-  vel.x = dx * speed;
-  vel.y = dy * speed;
+  // Same easing P1 gets from `updatePlayer`. P2 used to snap straight to full
+  // speed, which made the two players handle differently and made every
+  // direction change P2 asked for the jerkiest motion on either screen.
+  vel.x += (dx * speed - vel.x) * MOVE_ACCELERATION;
+  vel.y += (dy * speed - vel.y) * MOVE_ACCELERATION;
   pos.x += vel.x * dt;
   pos.y += vel.y * dt;
 
@@ -126,15 +130,42 @@ export class CommandBuffer {
   }
 }
 
+/** Shallowest jitter buffer the host will hold, in commands (~17ms each). */
+const MIN_BUFFER = 2;
+/** Deepest it will grow to. Beyond this the link is broken, not jittery. */
+const MAX_BUFFER = 12;
+/** Clean ticks before the buffer gives a command's worth of slack back. */
+const SHRINK_TICKS = 240;
+/** Hardest catch-up allowed, as a fraction of an extra command per tick. */
+const MAX_CATCHUP_RATE = 0.3;
+/** How much of the surplus is converted into catch-up, per command per tick. */
+const CATCHUP_GAIN = 0.04;
+
 /**
- * Host-side jitter buffer. Commands are consumed one per simulation tick so the
- * guest's inputs are applied at the same rate they were produced; a small
- * backlog is drained slightly faster to stop latency from accumulating.
+ * Host-side jitter buffer for the guest's input.
+ *
+ * The rule this now follows is that the guest's avatar on the host is a pure
+ * function of the command stream: every command is applied exactly once, in
+ * order, and nothing else ever moves it. That is what makes the guest's
+ * prediction land on the host's answer instead of near it. The old queue broke
+ * the rule at both ends — it discarded two or three commands in a tick to burn
+ * down a backlog, and it re-applied the last command forever when it ran dry —
+ * so the two sides disagreed constantly and the guest spent the whole match
+ * being dragged back into line.
+ *
+ * Timing is absorbed by the buffer instead. A tick with nothing queued simply
+ * doesn't advance the avatar, a surplus is spent by stepping twice on the odd
+ * tick, and the depth the buffer aims for grows whenever it runs dry and eases
+ * back down over a few clean seconds.
  */
 export class CommandQueue {
   private queue: InputCommand[] = [];
   private lastAccepted = 0;
   private lastApplied: InputCommand = { seq: 0, dx: 0, dy: 0, aim: 0 };
+  private target = MIN_BUFFER;
+  private cleanTicks = 0;
+  /** Fractional extra command owed to catch-up, spent one at a time. */
+  private catchUp = 0;
 
   /** Ignores duplicates from the redundant sends. */
   push(commands: InputCommand[]): void {
@@ -148,20 +179,55 @@ export class CommandQueue {
   }
 
   /**
-   * Pops the command for this tick. Returns the last applied command when the
-   * queue has run dry so movement holds rather than stuttering to a stop.
+   * How many movement steps to run for the guest's avatar this tick: 0 while
+   * waiting on a late packet, 2 while spending down a surplus, 1 otherwise.
+   * Call once per tick, then call `next()` that many times.
    */
-  next(): InputCommand {
-    // Burn down a backlog gradually rather than in one jump.
-    const extra = this.queue.length > 12 ? 2 : this.queue.length > 5 ? 1 : 0;
-    for (let i = 0; i < extra; i++) {
-      const skipped = this.queue.shift();
-      if (skipped) this.lastApplied = skipped;
+  stepsThisTick(): number {
+    if (this.queue.length === 0) {
+      // Ran dry: hold still for this tick rather than invent motion, and carry
+      // a little more slack so the next gap is covered.
+      if (this.target < MAX_BUFFER) this.target++;
+      this.cleanTicks = 0;
+      this.catchUp = 0;
+      return 0;
     }
 
+    this.cleanTicks++;
+    if (this.cleanTicks >= SHRINK_TICKS && this.target > MIN_BUFFER) {
+      this.cleanTicks = 0;
+      this.target--;
+    }
+
+    const surplus = this.queue.length - this.target;
+    if (surplus > 0) {
+      this.catchUp += Math.min(MAX_CATCHUP_RATE, surplus * CATCHUP_GAIN);
+    } else {
+      this.catchUp = 0;
+    }
+
+    if (this.catchUp >= 1 && this.queue.length >= 2) {
+      this.catchUp -= 1;
+      return 2;
+    }
+    return 1;
+  }
+
+  /** Pops the next command. Only valid within the budget `stepsThisTick` gave. */
+  next(): InputCommand {
     const cmd = this.queue.shift();
     if (cmd) this.lastApplied = cmd;
     return this.lastApplied;
+  }
+
+  /** Aim from the most recent command, held through a gap in the stream. */
+  get lastAim(): number {
+    return this.lastApplied.aim;
+  }
+
+  /** Commands of slack the buffer is currently carrying. */
+  get bufferTarget(): number {
+    return this.target;
   }
 
   get ackSeq(): number {
@@ -172,6 +238,9 @@ export class CommandQueue {
     this.queue.length = 0;
     this.lastAccepted = 0;
     this.lastApplied = { seq: 0, dx: 0, dy: 0, aim: 0 };
+    this.target = MIN_BUFFER;
+    this.cleanTicks = 0;
+    this.catchUp = 0;
   }
 }
 
@@ -180,39 +249,75 @@ export class CommandQueue {
 // ---------------------------------------------------------------------------
 
 /**
+ * Fraction of real time the render clock may be warped by while it converges on
+ * a new estimate. At 8% the world subtly speeds up or slows down; anything much
+ * larger and it reads as a stutter.
+ */
+export const MAX_TIME_WARP = 0.08;
+/** Past this much error, easing would take longer than the pop is worth. */
+const CLOCK_SNAP_MS = 250;
+
+/**
  * Maps host timestamps into the guest's local clock.
  *
  * The offset of the *least delayed* packet is the best estimate of the true
- * clock difference, so we snap down instantly on a faster packet and drift back
- * up slowly — that way one lucky packet doesn't pin the estimate forever, but
- * ordinary jitter doesn't shift the timeline either.
+ * clock difference, so the estimate snaps down instantly on a faster packet and
+ * drifts back up slowly — one lucky packet doesn't pin it forever, and ordinary
+ * jitter doesn't move it either.
+ *
+ * What the *renderer* sees is a second, rate-limited offset chasing that
+ * estimate. Applying the estimate directly meant every packet that beat the
+ * previous best jumped the render timeline forward, which is a visible pop
+ * exactly when the network got better. Now the timeline stays monotonic and
+ * absorbs the correction as a barely perceptible change of pace.
  */
 export class ClockSync {
-  private offset: number | null = null;
+  private target: number | null = null;
+  private applied = 0;
   private jitter = 0;
+  private lastLocal = 0;
 
   sample(hostTime: number, localTime: number): void {
     const sample = localTime - hostTime;
-    if (this.offset === null) {
-      this.offset = sample;
+    if (this.target === null) {
+      this.target = sample;
+      this.applied = sample;
+      this.lastLocal = localTime;
       return;
     }
-    const error = sample - this.offset;
+    const error = sample - this.target;
     this.jitter += (Math.abs(error) - this.jitter) * 0.1;
     if (error < 0) {
-      this.offset = sample;
+      this.target = sample;
     } else {
-      this.offset += error * 0.01;
+      this.target += error * 0.01;
     }
   }
 
+  /** Advances the rendered offset toward the estimate. Call once per frame. */
+  advance(localNow: number): void {
+    if (this.target === null) return;
+    const dt = Math.max(0, Math.min(250, localNow - this.lastLocal));
+    this.lastLocal = localNow;
+
+    const diff = this.target - this.applied;
+    if (Math.abs(diff) > CLOCK_SNAP_MS) {
+      // A stall or a tab that was backgrounded — easing this would take
+      // seconds, and the world would be visibly running at the wrong speed.
+      this.applied = this.target;
+      return;
+    }
+    const step = dt * MAX_TIME_WARP;
+    this.applied += Math.max(-step, Math.min(step, diff));
+  }
+
   get ready(): boolean {
-    return this.offset !== null;
+    return this.target !== null;
   }
 
   /** Host time corresponding to a local timestamp. */
   toHostTime(localTime: number): number {
-    return localTime - (this.offset ?? 0);
+    return localTime - this.applied;
   }
 
   /** Smoothed absolute jitter, in ms. */

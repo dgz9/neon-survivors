@@ -9,6 +9,8 @@ import {
   startGame,
   updateGameState,
   applyUpgrade,
+  createAimState,
+  resolveTouchAim,
 } from '@/lib/gameEngine';
 import { FIXED_DT, createAccumulator, advanceAccumulator, AccumulatorState } from '@/lib/engine/timestep';
 import {
@@ -34,6 +36,7 @@ import {
   stopMatchMusic,
 } from '@/lib/audio';
 import { checkAchievements, AchievementStats } from '@/lib/achievements';
+import { ViewTransform, createViewTransform, fitViewTransform } from '@/lib/viewport';
 import { GameScene } from './three/GameScene';
 import { TextParticles } from './three/TextParticles';
 import { PowerupSprites } from './three/PowerupSprites';
@@ -105,6 +108,8 @@ export default function Game({ playerImageUrl, playerName, arena = 'grid', onGam
   const [inputDetected, setInputDetected] = useState(false);
   const touchMovementRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
   const touchAimRef = useRef<{ x: number; y: number } | null>(null);
+  /** Remembers the touch facing so releasing both sticks holds it. */
+  const aimStateRef = useRef(createAimState());
 
   const gamepadIndexRef = useRef<number | null>(null);
   const lastPausePress = useRef<number>(0);
@@ -156,6 +161,25 @@ export default function Game({ playerImageUrl, playerName, arena = 'grid', onGam
   const mobileScale = isTouchDevice ? 0.7 : 1;
   const mobileScaleRef = useRef(mobileScale);
   mobileScaleRef.current = mobileScale;
+
+  /** World-to-canvas mapping shared with every renderer. */
+  const viewRef = useRef<ViewTransform>(createViewTransform());
+  const syncView = useCallback(() => {
+    const dims = dimensionsRef.current;
+    if (dims.width <= 0 || dims.height <= 0) return;
+    const scale = mobileScaleRef.current;
+    fitViewTransform(
+      viewRef.current,
+      dims.width,
+      dims.height,
+      Math.floor(dims.width / scale),
+      Math.floor(dims.height / scale),
+    );
+  }, []);
+
+  // Keep the mapping correct before the first simulated frame, and after every
+  // resize or rotation.
+  useEffect(syncView, [syncView, dimensions, mobileScale]);
 
   // Initialize game (only once)
   const initGame = useCallback(async () => {
@@ -272,11 +296,11 @@ export default function Game({ playerImageUrl, playerName, arena = 'grid', onGam
       const el = gameAreaRef.current;
       if (el) {
         const rect = el.getBoundingClientRect();
-        // Convert to world coordinates — the canvas is zoomed out on mobile.
-        const scale = mobileScaleRef.current;
+        // Undo exactly the zoom and offset the renderer applies.
+        const view = viewRef.current;
         inputRef.current.mousePos = {
-          x: (e.clientX - rect.left) / scale,
-          y: (e.clientY - rect.top) / scale,
+          x: (e.clientX - rect.left - view.offsetX) / view.scale,
+          y: (e.clientY - rect.top - view.offsetY) / view.scale,
         };
       }
     };
@@ -346,48 +370,15 @@ export default function Game({ playerImageUrl, playerName, arena = 'grid', onGam
         // Pass analog movement directly for smooth proportional control
         inputRef.current.touchMovement = touchMovementRef.current;
 
-        // Touch aim: offset from player position using right joystick
-        const ta = touchAimRef.current;
-        const player = gameStateRef.current.player;
-        if (ta) {
-          inputRef.current.mousePos = {
-            x: player.position.x + ta.x,
-            y: player.position.y + ta.y,
-          };
-        } else {
-          // Auto-aim at nearest enemy when right joystick is not active
-          const enemies = gameStateRef.current.enemies;
-          const enemyCount = gameStateRef.current.enemies.length;
-          let nearestDist = Infinity;
-          let nearestPos: Vector2 | null = null;
-          for (let i = 0; i < enemyCount; i++) {
-            const e = enemies[i];
-            const dx = e.position.x - player.position.x;
-            const dy = e.position.y - player.position.y;
-            const dist = dx * dx + dy * dy;
-            if (dist < nearestDist) {
-              nearestDist = dist;
-              nearestPos = e.position;
-            }
-          }
-          if (nearestPos) {
-            inputRef.current.mousePos = { x: nearestPos.x, y: nearestPos.y };
-          } else {
-            // No enemies: aim in movement direction or to the right
-            const tm = touchMovementRef.current;
-            if (Math.abs(tm.x) > 0.1 || Math.abs(tm.y) > 0.1) {
-              inputRef.current.mousePos = {
-                x: player.position.x + tm.x * 200,
-                y: player.position.y + tm.y * 200,
-              };
-            } else {
-              inputRef.current.mousePos = {
-                x: player.position.x + 200,
-                y: player.position.y,
-              };
-            }
-          }
-        }
+        // The aim stick points the gun; with it idle the player shoots the way
+        // they are walking. Nothing ever targets an enemy for them.
+        resolveTouchAim(
+          aimStateRef.current,
+          gameStateRef.current.player.position,
+          touchAimRef.current,
+          touchMovementRef.current,
+          inputRef.current.mousePos,
+        );
       } else {
         inputRef.current.touchMovement = undefined;
       }
@@ -441,6 +432,7 @@ export default function Game({ playerImageUrl, playerName, arena = 'grid', onGam
         const dims = dimensionsRef.current;
         const effectiveWidth = Math.floor(dims.width / mobileScale);
         const effectiveHeight = Math.floor(dims.height / mobileScale);
+        syncView();
         for (let i = 0; i < tickCount; i++) {
           gameStateRef.current = updateGameState(
             gameStateRef.current,
@@ -591,7 +583,7 @@ export default function Game({ playerImageUrl, playerName, arena = 'grid', onGam
     return () => {
       cancelAnimationFrame(animationFrameRef.current);
     };
-  }, [isLoading, isPaused, showUpgrades, onGameOver, isTouchDevice, mobileScale]);
+  }, [isLoading, isPaused, showUpgrades, onGameOver, isTouchDevice, mobileScale, syncView]);
 
   return (
     <div className={`fixed inset-0 bg-brutal-black flex flex-col ${isTouchDevice ? 'game-touch-area safe-area-top safe-area-bottom safe-area-x' : ''}`}>
@@ -736,7 +728,7 @@ export default function Game({ playerImageUrl, playerName, arena = 'grid', onGam
             dpr={isTouchDevice ? [1, 1.75] : [1, 2]}
             style={{ position: 'absolute', inset: 0, background: '#0a0a0a' }}
           >
-            <GameScene gameStateRef={gameStateRef} playerImage={playerImage} mobileScale={mobileScale} />
+            <GameScene gameStateRef={gameStateRef} playerImage={playerImage} viewRef={viewRef} />
           </Canvas>
         )}
 
@@ -753,8 +745,8 @@ export default function Game({ playerImageUrl, playerName, arena = 'grid', onGam
         )}
 
         {/* DOM overlays */}
-        <TextParticles gameStateRef={gameStateRef} worldScale={mobileScale} />
-        <PowerupSprites gameStateRef={gameStateRef} worldScale={mobileScale} />
+        <TextParticles gameStateRef={gameStateRef} viewRef={viewRef} />
+        <PowerupSprites gameStateRef={gameStateRef} viewRef={viewRef} />
         <HUD displayState={displayState} isMobile={isTouchDevice} />
 
         {/* Stats display - permanent bonuses and active buffs (hidden on mobile) */}

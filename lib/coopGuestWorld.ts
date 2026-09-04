@@ -8,13 +8,14 @@
  * GC mid-fight.
  */
 
-import { Enemy, EnemyType, GameState, Projectile } from '@/types/game';
+import { Enemy, EnemyType, ExperienceOrb, GameState, Projectile } from '@/types/game';
 import { DecodedSnapshot } from './multiplayer';
 import {
   SnapshotBuffer,
   ClockSync,
   blend,
   computeInterpolationDelay,
+  MAX_TIME_WARP,
 } from './netcode';
 import { NetEvent } from './engine/netEvents';
 import { replayNetEvent, eventTime, ReplayHooks } from './engine/netReplay';
@@ -58,21 +59,51 @@ function makeProjectile(): Projectile {
   };
 }
 
+function makeOrb(): ExperienceOrb {
+  return {
+    _active: true,
+    _poolIndex: 0,
+    id: '',
+    nid: 0,
+    position: { x: 0, y: 0 },
+    value: 0,
+    createdAt: 0,
+  };
+}
+
 export class CoopGuestWorld {
   readonly buffer = new SnapshotBuffer<DecodedSnapshot>();
   readonly clock = new ClockSync();
 
   private enemyCache = new Map<string, Enemy>();
   private projectileCache = new Map<number, Projectile>();
+  private orbCache = new Map<number, ExperienceOrb>();
   private pendingEvents: NetEvent[] = [];
   private lastEventTime = 0;
+  /** Eased interpolation delay, in ms. Zero until the first frame. */
+  private delayMs = 0;
+  private lastRenderCall = 0;
 
   /** Live arrays handed to the renderers. */
   enemies: Enemy[] = [];
   projectiles: Projectile[] = [];
+  orbs: ExperienceOrb[] = [];
 
   /** Most recent authoritative values (not interpolated). */
   latest: DecodedSnapshot | null = null;
+
+  /**
+   * The host's arena size. The host owns it, so the guest sizes its own
+   * movement bounds and camera from this rather than from its own viewport —
+   * otherwise the two players are walking around different arenas.
+   */
+  get worldWidth(): number {
+    return this.latest?.worldWidth || 0;
+  }
+
+  get worldHeight(): number {
+    return this.latest?.worldHeight || 0;
+  }
 
   ingest(snapshot: DecodedSnapshot, localNowMs: number): void {
     this.clock.sample(snapshot.hostTime, localNowMs);
@@ -90,13 +121,37 @@ export class CoopGuestWorld {
     }
   }
 
+  /**
+   * How far behind the host the guest is currently drawing.
+   *
+   * Eased rather than applied directly: the raw figure tracks measured jitter,
+   * and feeding a jitter spike straight into the render clock warps the
+   * timeline by more than the spike itself.
+   */
   get interpolationDelayMs(): number {
-    return computeInterpolationDelay(SNAPSHOT_INTERVAL_MS, this.clock.jitterMs);
+    return this.delayMs || computeInterpolationDelay(SNAPSHOT_INTERVAL_MS, this.clock.jitterMs);
   }
 
-  /** The host-clock instant currently being rendered. */
+  /** The host-clock instant currently being rendered. Call once per frame. */
   renderTime(localNowMs: number): number {
-    return this.clock.toHostTime(localNowMs) - this.interpolationDelayMs;
+    const elapsed = this.lastRenderCall > 0
+      ? Math.max(0, Math.min(250, localNowMs - this.lastRenderCall))
+      : 0;
+    this.lastRenderCall = localNowMs;
+
+    const target = computeInterpolationDelay(SNAPSHOT_INTERVAL_MS, this.clock.jitterMs);
+    if (this.delayMs === 0) {
+      this.delayMs = target;
+    } else {
+      // Same budget the clock offset gets, so the two corrections together can
+      // never warp the timeline enough to read as a stutter.
+      const step = elapsed * MAX_TIME_WARP;
+      const diff = target - this.delayMs;
+      this.delayMs += Math.max(-step, Math.min(step, diff));
+    }
+
+    this.clock.advance(localNowMs);
+    return this.clock.toHostTime(localNowMs) - this.delayMs;
   }
 
   /**
@@ -234,13 +289,49 @@ export class CoopGuestWorld {
       }
     }
 
+    // --- XP orbs -------------------------------------------------------------
+    // Magnet pull drags these around fast enough that handing over the newest
+    // snapshot made them visibly step at the snapshot rate.
+    this.orbs.length = 0;
+    const fromOrbs = new Map<number, DecodedSnapshot['experienceOrbs'][number]>();
+    for (const o of from.data.experienceOrbs) fromOrbs.set(o.nid, o);
+
+    for (const next of to.data.experienceOrbs) {
+      let orb = this.orbCache.get(next.nid);
+      if (!orb) {
+        orb = makeOrb();
+        orb.nid = next.nid;
+        orb.id = `xo-${next.nid}`;
+        this.orbCache.set(next.nid, orb);
+      }
+
+      const prev = fromOrbs.get(next.nid);
+      if (prev) {
+        orb.position.x = blend(prev.position.x, next.position.x, a);
+        orb.position.y = blend(prev.position.y, next.position.y, a);
+      } else {
+        // Dropped between snapshots — no earlier sample to come from.
+        orb.position.x = next.position.x;
+        orb.position.y = next.position.y;
+      }
+      orb.value = next.value;
+      this.orbs.push(orb);
+    }
+
+    if (this.orbCache.size > this.orbs.length * 2 + 32) {
+      const live = new Set(this.orbs.map(o => o.nid));
+      for (const nid of Array.from(this.orbCache.keys())) {
+        if (!live.has(nid)) this.orbCache.delete(nid);
+      }
+    }
+
     // --- Everything else is either static or too slow to need interpolation ---
     state.enemies = this.enemies;
     state.projectiles = this.projectiles;
     state.projectileCount = this.projectiles.length;
     state.powerups = to.data.powerups as typeof state.powerups;
-    state.experienceOrbs = to.data.experienceOrbs as typeof state.experienceOrbs;
-    state.experienceOrbCount = to.data.experienceOrbs.length;
+    state.experienceOrbs = this.orbs;
+    state.experienceOrbCount = this.orbs.length;
 
     state.score = to.data.score;
     state.wave = to.data.wave;
@@ -266,11 +357,15 @@ export class CoopGuestWorld {
 
   reset(): void {
     this.buffer.clear();
+    this.delayMs = 0;
+    this.lastRenderCall = 0;
     this.enemyCache.clear();
     this.projectileCache.clear();
+    this.orbCache.clear();
     this.pendingEvents.length = 0;
     this.enemies.length = 0;
     this.projectiles.length = 0;
+    this.orbs.length = 0;
     this.latest = null;
   }
 }

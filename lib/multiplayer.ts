@@ -80,6 +80,10 @@ interface WireGameStateV2 {
   __v: 2;
   t: number;
   ack: number;
+  /** Host world size. The host owns the arena's dimensions; without them a
+   *  guest on a differently shaped screen renders a different world. */
+  ww: number;
+  wh: number;
   p: WirePlayer;
   p2: WirePlayer | null;
   sc: number;
@@ -97,7 +101,7 @@ interface WireGameStateV2 {
   e: Array<[string, number, number, number, number, number, number, string, number, number, number | null, number, number]>;
   pr: Array<[number, number, number, number, number, number, number, number]>;
   pw: Array<[number, number, string]>;
-  xo: Array<[number, number, number]>;
+  xo: Array<[number, number, number, number]>;
   ev: NetEvent[];
   go: 0 | 1;
   ru: 0 | 1;
@@ -109,6 +113,8 @@ interface WireGameStateV2 {
 type RawGameStateLike = {
   t: number;
   ack: number;
+  worldWidth: number;
+  worldHeight: number;
   killStreak: number;
   nearMissCount: number;
   gameTime: number;
@@ -172,7 +178,13 @@ type RawGameStateLike = {
     isEnemy: boolean;
   }>;
   powerups: Array<{ position: { x: number; y: number }; type: string }>;
-  experienceOrbs: Array<{ position: { x: number; y: number }; value: number }>;
+  experienceOrbs: Array<{ nid: number; position: { x: number; y: number }; value: number }>;
+  // Projectiles and orbs live in pools, so the arrays run past the live
+  // entities; these say where to stop. Encoding straight off the pools is what
+  // keeps a busy wave from building thousands of throwaway objects a second
+  // just to hand them to the encoder.
+  projectileCount: number;
+  experienceOrbCount: number;
   isGameOver: boolean;
   isRunning: boolean;
 };
@@ -256,6 +268,65 @@ function decodePlayer(player: WirePlayer) {
   };
 }
 
+function encodeEnemies(
+  state: RawGameStateLike,
+  colorId: (color: string) => number,
+): WireGameStateV2["e"] {
+  const count = state.enemies.length;
+  const out: WireGameStateV2["e"] = new Array(count);
+  for (let i = 0; i < count; i++) {
+    const enemy = state.enemies[i];
+    out[i] = [
+      enemy.id,
+      round1(enemy.position.x),
+      round1(enemy.position.y),
+      round1(enemy.velocity?.x || 0),
+      round1(enemy.velocity?.y || 0),
+      round1(enemy.health),
+      round1(enemy.maxHealth),
+      enemy.type,
+      round1(enemy.radius),
+      colorId(enemy.color),
+      enemy.ghostAlpha ?? null,
+      Math.round(enemy.spawnTime || 0),
+      enemy.isElite ? 1 : 0,
+    ];
+  }
+  return out;
+}
+
+function encodeProjectiles(
+  state: RawGameStateLike,
+  colorId: (color: string) => number,
+): WireGameStateV2["pr"] {
+  const count = Math.min(state.projectileCount, state.projectiles.length);
+  const out: WireGameStateV2["pr"] = new Array(count);
+  for (let i = 0; i < count; i++) {
+    const projectile = state.projectiles[i];
+    out[i] = [
+      projectile.nid,
+      round1(projectile.position.x),
+      round1(projectile.position.y),
+      round1(projectile.velocity.x),
+      round1(projectile.velocity.y),
+      round1(projectile.radius),
+      colorId(projectile.color),
+      projectile.isEnemy ? 1 : 0,
+    ];
+  }
+  return out;
+}
+
+function encodeOrbs(state: RawGameStateLike): WireGameStateV2["xo"] {
+  const count = Math.min(state.experienceOrbCount, state.experienceOrbs.length);
+  const out: WireGameStateV2["xo"] = new Array(count);
+  for (let i = 0; i < count; i++) {
+    const orb = state.experienceOrbs[i];
+    out[i] = [orb.nid, round1(orb.position.x), round1(orb.position.y), round1(orb.value)];
+  }
+  return out;
+}
+
 function encodeGameStateForWire(state: unknown): unknown {
   if (!isRawGameStateLike(state)) return state;
 
@@ -275,6 +346,8 @@ function encodeGameStateForWire(state: unknown): unknown {
     __v: 2,
     t: Math.round(state.t),
     ack: state.ack || 0,
+    ww: Math.round(state.worldWidth),
+    wh: Math.round(state.worldHeight),
     p: encodePlayer(state.player),
     p2: state.player2 ? encodePlayer(state.player2) : null,
     sc: Math.round(state.score || 0),
@@ -286,44 +359,17 @@ function encodeGameStateForWire(state: unknown): unknown {
     ss: round1(state.screenShake || 0),
     pl: Math.round(state.pendingLevelUps || 0),
     cp: palette,
-    e: state.enemies.map(enemy => [
-      enemy.id,
-      round1(enemy.position.x),
-      round1(enemy.position.y),
-      round1(enemy.velocity?.x || 0),
-      round1(enemy.velocity?.y || 0),
-      round1(enemy.health),
-      round1(enemy.maxHealth),
-      enemy.type,
-      round1(enemy.radius),
-      colorId(enemy.color),
-      enemy.ghostAlpha ?? null,
-      Math.round(enemy.spawnTime || 0),
-      enemy.isElite ? 1 : 0,
-    ]),
+    e: encodeEnemies(state, colorId),
     // Projectiles are render-only on the guest, so damage and piercing never
     // leave the host. They are also the highest-count entity, so every dropped
     // field pays for itself many times over.
-    pr: state.projectiles.map(projectile => [
-      projectile.nid,
-      round1(projectile.position.x),
-      round1(projectile.position.y),
-      round1(projectile.velocity.x),
-      round1(projectile.velocity.y),
-      round1(projectile.radius),
-      colorId(projectile.color),
-      projectile.isEnemy ? 1 : 0,
-    ]),
+    pr: encodeProjectiles(state, colorId),
     pw: state.powerups.map(powerup => [
       round1(powerup.position.x),
       round1(powerup.position.y),
       powerup.type,
     ]),
-    xo: state.experienceOrbs.map(orb => [
-      round1(orb.position.x),
-      round1(orb.position.y),
-      round1(orb.value),
-    ]),
+    xo: encodeOrbs(state),
     ev: state.events || [],
     go: state.isGameOver ? 1 : 0,
     ru: state.isRunning ? 1 : 0,
@@ -338,6 +384,8 @@ function encodeGameStateForWire(state: unknown): unknown {
 export interface DecodedSnapshot {
   hostTime: number;
   ack: number;
+  worldWidth: number;
+  worldHeight: number;
   player: ReturnType<typeof decodePlayer>;
   player2: ReturnType<typeof decodePlayer> | null;
   score: number;
@@ -370,7 +418,7 @@ export interface DecodedSnapshot {
     isEnemy: boolean;
   }>;
   powerups: Array<{ id: string; position: { x: number; y: number }; type: string }>;
-  experienceOrbs: Array<{ id: string; position: { x: number; y: number }; value: number }>;
+  experienceOrbs: Array<{ nid: number; position: { x: number; y: number }; value: number }>;
   events: NetEvent[];
   isGameOver: boolean;
   isRunning: boolean;
@@ -392,6 +440,8 @@ export function decodeGameState(state: unknown): DecodedSnapshot | null {
   return {
     hostTime: state.t,
     ack: state.ack,
+    worldWidth: state.ww,
+    worldHeight: state.wh,
     player: decodePlayer(state.p),
     player2: state.p2 ? decodePlayer(state.p2) : null,
     score: state.sc,
@@ -428,10 +478,10 @@ export function decodeGameState(state: unknown): DecodedSnapshot | null {
       position: { x: powerup[0] as number, y: powerup[1] as number },
       type: powerup[2] as string,
     })),
-    experienceOrbs: state.xo.map((orb, index) => ({
-      id: `xo-${index}`,
-      position: { x: orb[0], y: orb[1] },
-      value: orb[2],
+    experienceOrbs: state.xo.map(orb => ({
+      nid: orb[0],
+      position: { x: orb[1], y: orb[2] },
+      value: orb[3],
     })),
     events: state.ev || [],
     isGameOver: state.go === 1,
