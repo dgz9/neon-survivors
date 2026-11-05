@@ -7,7 +7,7 @@ import CoopGame from '@/components/CoopGame';
 import GameOver from '@/components/GameOver';
 import Leaderboard from '@/components/Leaderboard';
 import Lobby from '@/components/Lobby';
-import { Trophy, Users, User, Gamepad2 } from 'lucide-react';
+import { Trophy, Users, User, Gamepad2, Sailboat } from 'lucide-react';
 import PartySocket from 'partysocket';
 import { MultiplayerPlayer } from '@/lib/multiplayer';
 import { isMuted, setMuted } from '@/lib/audio';
@@ -272,6 +272,16 @@ export default function Home() {
             <Gamepad2 className="w-5 h-5 text-electric-orange" />
             <span className="font-mono text-sm uppercase tracking-wider text-electric-orange">
               Play Cannonfall
+            </span>
+            <span className="font-mono text-[10px] uppercase tracking-wider text-white/40">New game</span>
+          </a>
+          <a
+            href="https://skyward.neonbit.gg"
+            className="mt-3 flex items-center gap-3 px-6 py-3 border-2 border-electric-green/50 hover:border-electric-green hover:bg-electric-green/10 transition-all"
+          >
+            <Sailboat className="w-5 h-5 text-electric-green" />
+            <span className="font-mono text-sm uppercase tracking-wider text-electric-green">
+              Play Skyward Shores
             </span>
             <span className="font-mono text-[10px] uppercase tracking-wider text-white/40">New game</span>
           </a>
