@@ -7,10 +7,15 @@ import CoopGame from '@/components/CoopGame';
 import GameOver from '@/components/GameOver';
 import Leaderboard from '@/components/Leaderboard';
 import Lobby from '@/components/Lobby';
-import { Trophy, Users, User, Gamepad2, Sailboat } from 'lucide-react';
+import { Trophy, Users, User, Gamepad2 } from 'lucide-react';
 import PartySocket from 'partysocket';
 import { MultiplayerPlayer } from '@/lib/multiplayer';
 import { isMuted, setMuted } from '@/lib/audio';
+import { importCarriedProgress } from '@/lib/carry';
+
+// Before anything reads saved progress: pick up what the Neon Bit launcher carried over from
+// neonbit.gg, where this game used to live.
+importCarriedProgress();
 
 type GamePhase = 'menu' | 'lobby' | 'playing' | 'playing-coop' | 'gameover';
 type GameMode = 'solo' | 'coop';
@@ -150,8 +155,8 @@ export default function Home() {
 
             {/* Main title */}
             <div className="relative">
-              <h1 className="brutal-title glitch-text" data-text="NEON BIT">
-                NEON BIT
+              <h1 className="brutal-title glitch-text" data-text="NEON SURVIVORS">
+                NEON SURVIVORS
               </h1>
 
               {/* Subtitle with slashes */}
@@ -266,24 +271,13 @@ export default function Home() {
 
           {/* More games */}
           <a
-            href="https://cannonfall.neonbit.gg"
-            className="mt-3 flex items-center gap-3 px-6 py-3 border-2 border-electric-orange/50 hover:border-electric-orange hover:bg-electric-orange/10 transition-all"
+            href="https://neonbit.gg"
+            className="mt-3 flex items-center gap-3 px-6 py-3 border-2 border-electric-cyan/50 hover:border-electric-cyan hover:bg-electric-cyan/10 transition-all"
           >
-            <Gamepad2 className="w-5 h-5 text-electric-orange" />
-            <span className="font-mono text-sm uppercase tracking-wider text-electric-orange">
-              Play Cannonfall
+            <Gamepad2 className="w-5 h-5 text-electric-cyan" />
+            <span className="font-mono text-sm uppercase tracking-wider text-electric-cyan">
+              More Neon Bit games
             </span>
-            <span className="font-mono text-[10px] uppercase tracking-wider text-white/40">New game</span>
-          </a>
-          <a
-            href="https://skyward.neonbit.gg"
-            className="mt-3 flex items-center gap-3 px-6 py-3 border-2 border-electric-green/50 hover:border-electric-green hover:bg-electric-green/10 transition-all"
-          >
-            <Sailboat className="w-5 h-5 text-electric-green" />
-            <span className="font-mono text-sm uppercase tracking-wider text-electric-green">
-              Play Skyward Shores
-            </span>
-            <span className="font-mono text-[10px] uppercase tracking-wider text-white/40">New game</span>
           </a>
 
           {/* How to play */}

@@ -1,6 +1,12 @@
-# Neon Bit
+# Neon Survivors
 
 A Vampire Survivors-style arcade shooter with brutalist neon aesthetics. Now with **co-op multiplayer**!
+
+Play it at [survivors.neonbit.gg](https://survivors.neonbit.gg). It's one of the [Neon Bit](https://neonbit.gg) games.
+
+It used to live at neonbit.gg itself. Browsers keep saved data per address, so the Neon Bit
+launcher carries a player's achievements, crystals and upgrades over in its Play link the first
+time, and `lib/carry.ts` merges them in here.
 
 ## Features
 
