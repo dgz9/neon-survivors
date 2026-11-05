@@ -7,7 +7,7 @@ import CoopGame from '@/components/CoopGame';
 import GameOver from '@/components/GameOver';
 import Leaderboard from '@/components/Leaderboard';
 import Lobby from '@/components/Lobby';
-import { Trophy, Users, User } from 'lucide-react';
+import { Trophy, Users, User, Gamepad2 } from 'lucide-react';
 import PartySocket from 'partysocket';
 import { MultiplayerPlayer } from '@/lib/multiplayer';
 import { isMuted, setMuted } from '@/lib/audio';
@@ -263,6 +263,18 @@ export default function Home() {
               View Leaderboard
             </span>
           </button>
+
+          {/* More games */}
+          <a
+            href="https://cannonfall.neonbit.gg"
+            className="mt-3 flex items-center gap-3 px-6 py-3 border-2 border-electric-orange/50 hover:border-electric-orange hover:bg-electric-orange/10 transition-all"
+          >
+            <Gamepad2 className="w-5 h-5 text-electric-orange" />
+            <span className="font-mono text-sm uppercase tracking-wider text-electric-orange">
+              Play Cannonfall
+            </span>
+            <span className="font-mono text-[10px] uppercase tracking-wider text-white/40">New game</span>
+          </a>
 
           {/* How to play */}
           <div className="w-full max-w-2xl mt-8 mb-6">
