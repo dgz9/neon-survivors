@@ -26,22 +26,27 @@ time, and `lib/carry.ts` merges them in here.
 
 3. **Add Environment Variables** in Vercel → Settings → Environment Variables:
    - `DATABASE_URL` - Your Neon PostgreSQL connection string
-   - `NEXT_PUBLIC_PARTYKIT_HOST` - Your PartyKit deployment URL (see below)
 
 4. **Deploy** - Vercel will build and deploy automatically
 
-## PartyKit Setup (for Co-op)
+## Co-op server
 
-Co-op multiplayer requires a PartyKit server:
+Co-op rooms run on Cloudflare, using [PartyServer](https://github.com/cloudflare/partykit) on
+Durable Objects (`party/server.ts`, `wrangler.jsonc`). They moved here when PartyKit's hosted
+platform shut down in October 2026.
 
-1. **Deploy PartyKit**
-   ```bash
-   npx partykit login
-   npm run party:deploy
-   ```
+Cloudflare builds the server from this repo, so pushing to `master` deploys it along with the game.
+The project there has to stay named `neon-survivors-party`, the `name` in `wrangler.jsonc`. To deploy
+it by hand instead:
 
-2. **Update Environment**
-   - Set `NEXT_PUBLIC_PARTYKIT_HOST` to your PartyKit URL (e.g., `neonbit.username.partykit.dev`)
+```bash
+npx wrangler@4 login
+npm run party:deploy
+```
+
+The game finds the server through `NEXT_PUBLIC_PARTY_HOST` in `.env.production`, which is
+committed because the address isn't secret. If the Worker's address ever changes, update it there.
+`ORIGINS` at the top of `party/server.ts` lists the sites allowed to connect from a browser.
 
 ## Local Development
 
@@ -49,18 +54,18 @@ Co-op multiplayer requires a PartyKit server:
 # Install dependencies
 npm install
 
-# Run both Next.js and PartyKit dev servers
+# Run the game and the co-op server together
 npm run dev:all
 
 # Or run them separately:
 npm run dev          # Next.js on :3000
-npm run dev:party    # PartyKit on :1999
+npm run dev:party    # Co-op server on :1999
 ```
 
 For local testing, `.env.local` should have:
 ```
 DATABASE_URL=your_neon_connection_string
-NEXT_PUBLIC_PARTYKIT_HOST=localhost:1999
+NEXT_PUBLIC_PARTY_HOST=localhost:1999
 ```
 
 ## Tech Stack
@@ -70,4 +75,4 @@ NEXT_PUBLIC_PARTYKIT_HOST=localhost:1999
 - Tailwind CSS
 - Canvas API for rendering
 - Neon PostgreSQL for leaderboard
-- PartyKit for real-time multiplayer
+- PartyServer on Cloudflare Durable Objects for real-time multiplayer

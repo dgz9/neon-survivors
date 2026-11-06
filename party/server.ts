@@ -1,4 +1,11 @@
-import type * as Party from "partykit/server";
+import { Server, routePartykitRequest, type Connection, type WSMessage } from "partyserver";
+
+// The co-op room server, on Cloudflare (see wrangler.jsonc). Each room is its own Durable
+// Object, and everything here is held in memory for as long as someone is connected.
+
+// Only the game may open a socket from a browser, so another site can't spend this account's
+// free allowance. Anything can still connect without a browser.
+const ORIGINS = /^(https:\/\/survivors\.neonbit\.gg|https:\/\/neon-survivors[a-z0-9-]*\.vercel\.app|http:\/\/(localhost|127\.0\.0\.1)(:\d+)?)$/;
 
 // Message types
 interface PlayerJoin {
@@ -84,22 +91,21 @@ interface Player {
   isHost: boolean;
 }
 
-export default class NeonSurvivorsParty implements Party.Server {
+// The binding's name, Main, is what makes this the default party at /parties/main/:room
+export class Main extends Server {
   players: Map<string, Player> = new Map();
   // Track connections separately - connections can change, players persist
-  connections: Map<string, Party.Connection> = new Map();
+  connections: Map<string, Connection> = new Map();
   hostId: string | null = null;
   gameStarted: boolean = false;
 
-  constructor(readonly room: Party.Room) {}
-
-  onConnect(conn: Party.Connection, ctx: Party.ConnectionContext) {
-    console.log(`[SERVER] Connection ${conn.id} joined room ${this.room.id}, total connections: ${this.connections.size + 1}`);
+  onConnect(conn: Connection) {
+    console.log(`[SERVER] Connection ${conn.id} joined room ${this.name}, total connections: ${this.connections.size + 1}`);
     // Store connection, but don't add as player until they send player-join
     this.connections.set(conn.id, conn);
   }
 
-  onClose(conn: Party.Connection) {
+  onClose(conn: Connection) {
     console.log(`[SERVER] Connection ${conn.id} closed, gameStarted=${this.gameStarted}`);
     this.connections.delete(conn.id);
     
@@ -130,7 +136,10 @@ export default class NeonSurvivorsParty implements Party.Server {
     }
   }
 
-  onMessage(message: string, sender: Party.Connection) {
+  onMessage(sender: Connection, raw: WSMessage) {
+    // Everything in this game's protocol is JSON text
+    if (typeof raw !== "string") return;
+    const message = raw;
     try {
       const data = JSON.parse(message) as Message;
       
@@ -189,7 +198,7 @@ export default class NeonSurvivorsParty implements Party.Server {
     }
   }
 
-  handlePlayerJoin(conn: Party.Connection, data: PlayerJoin) {
+  handlePlayerJoin(conn: Connection, data: PlayerJoin) {
     // Check if this player already exists (reconnection case)
     let existingPlayer: Player | undefined;
     for (const [id, player] of this.players) {
@@ -230,7 +239,7 @@ export default class NeonSurvivorsParty implements Party.Server {
         imageUrl: p.imageUrl,
         isHost: p.isHost,
       })),
-      roomCode: this.room.id,
+      roomCode: this.name,
     };
     this.broadcastToConnections(roomInfo);
   }
@@ -275,4 +284,18 @@ export default class NeonSurvivorsParty implements Party.Server {
   }
 }
 
-NeonSurvivorsParty satisfies Party.Worker;
+interface Env extends Record<string, unknown> {
+  Main: DurableObjectNamespace;
+}
+
+export default {
+  async fetch(request: Request, env: Env) {
+    const response = await routePartykitRequest(request, env as never, {
+      onBeforeConnect(req) {
+        const origin = req.headers.get("Origin");
+        if (origin && !ORIGINS.test(origin)) return new Response("Not from the game.", { status: 403 });
+      },
+    });
+    return response ?? new Response("The Neon Survivors co-op server. The game is at https://survivors.neonbit.gg\n", { status: new URL(request.url).pathname === "/" ? 200 : 404 });
+  },
+};

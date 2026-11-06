@@ -4,12 +4,12 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "dev:party": "partykit dev",
+    "dev:party": "npx --yes wrangler@4 dev --port 1999",
     "dev:all": "concurrently \"npm run dev\" \"npm run dev:party\"",
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "party:deploy": "partykit deploy"
+    "party:deploy": "npx --yes wrangler@4 deploy"
   },
   "dependencies": {
     "@neondatabase/serverless": "^1.0.2",
@@ -19,7 +19,7 @@
     "@vercel/analytics": "^1.6.1",
     "lucide-react": "^0.563.0",
     "next": "^14.2.0",
-    "partykit": "^0.0.115",
+    "partyserver": "^0.5.10",
     "partysocket": "^1.1.10",
     "postprocessing": "^6.36.0",
     "react": "^18.2.0",

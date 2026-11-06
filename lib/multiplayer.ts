@@ -2,7 +2,7 @@ import PartySocket from "partysocket";
 import type { WireCommand } from "./netcode";
 import type { NetEvent } from "./engine/netEvents";
 
-const PARTYKIT_HOST = process.env.NEXT_PUBLIC_PARTYKIT_HOST || "localhost:1999";
+const PARTY_HOST = process.env.NEXT_PUBLIC_PARTY_HOST || "localhost:1999";
 
 export interface MultiplayerPlayer {
   id: string;
@@ -511,7 +511,7 @@ export function createPartySocket(
   onClose?: () => void
 ): PartySocket {
   const socket = new PartySocket({
-    host: PARTYKIT_HOST,
+    host: PARTY_HOST,
     room: roomCode.toUpperCase(),
   });
 

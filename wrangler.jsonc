@@ -1,0 +1,12 @@
+// The co-op server on Cloudflare (party/server.ts). The game itself is on Vercel.
+{
+  "name": "neon-survivors-party",
+  "main": "party/server.ts",
+  "compatibility_date": "2026-10-01",
+  "durable_objects": {
+    "bindings": [{ "name": "Main", "class_name": "Main" }]
+  },
+  // Cloudflare's free plan only offers SQLite-backed objects. Rooms keep nothing on disk, but the class still has to be declared this way.
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Main"] }],
+  "observability": { "enabled": true }
+}

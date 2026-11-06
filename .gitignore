@@ -40,3 +40,6 @@ NUL
 
 # Testing
 coverage/
+
+# Cloudflare dev state
+.wrangler
